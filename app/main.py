@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
+# reels 라우터 import
+from app.api.v1.reels import router as reels_router
 
 app = FastAPI(
     title="Shorts Reels Generator API",
@@ -8,7 +10,7 @@ app = FastAPI(
 )
 
 # CORS 설정
-cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,*").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
@@ -16,6 +18,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Reels 라우터 등록
+app.include_router(reels_router, prefix="/api/v1/reels", tags=["reels"])
 
 @app.get("/health")
 def health_check():
