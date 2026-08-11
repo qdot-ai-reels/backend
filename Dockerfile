@@ -17,5 +17,5 @@ COPY . .
 
 EXPOSE 8000
 
-# FastAPI 실행 (로컬 개발용 --reload 옵션 포함)
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# FastAPI 실행 (로컬 개발할땐 --reload 옵션 포함)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
