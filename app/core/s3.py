@@ -16,6 +16,7 @@ def generate_presigned_url(object_key: str = "dummy_reels.mp4", expiration: int 
         aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
         aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
         region_name=settings.AWS_REGION,
+        endpoint_url=f"https://s3.{settings.AWS_REGION}.amazonaws.com", # <- 서울 리전 주소 강제 지정
         config=boto3.session.Config(signature_version='s3v4') # AWS 최신 보안 서명 V4 적용
     )
 
