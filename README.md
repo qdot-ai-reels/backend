@@ -136,3 +136,5 @@ Content-Type: application/json
 ```
 
 기본 영상 모델은 `OPENROUTER_VIDEO_MODEL` 환경변수로 변경할 수 있습니다.
+영상 생성 요청의 `duration_seconds`는 스크립트의 마지막 장면 종료 시간과 같아야 하며,
+스크립트 형식이 올바르지 않거나 시간이 맞지 않으면 외부 API를 호출하지 않습니다.

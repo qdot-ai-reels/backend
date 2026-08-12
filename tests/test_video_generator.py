@@ -16,7 +16,7 @@ SCRIPT = {
     "scenes": [
         {
             "scene_number": 1,
-            "time_range_sec": [0, 3],
+            "time_range_sec": [0, 8],
             "visual": "상품을 화면 중앙에 보여준다.",
             "subtitle": "상품 소개",
             "voiceover": "상품을 소개합니다.",
@@ -102,6 +102,39 @@ class VideoGeneratorTests(unittest.TestCase):
 
         with self.assertRaises(VideoGenerationError):
             client.generate_video(VideoGenerationRequest(script=SCRIPT, image_url="https://example.com/product.jpg"))
+
+    def test_rejects_script_when_scene_duration_does_not_match_video_duration(self):
+        opener = SequentialOpener([])
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            opener=opener,
+            sleeper=lambda _seconds: None,
+        )
+
+        with self.assertRaises(VideoGenerationError):
+            client.generate_video(
+                VideoGenerationRequest(script=SCRIPT, image_url="https://example.com/product.jpg", duration_seconds=3)
+            )
+
+        self.assertEqual(opener.requests, [])
+
+    def test_rejects_invalid_script_before_submitting_video_job(self):
+        opener = SequentialOpener([])
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            opener=opener,
+            sleeper=lambda _seconds: None,
+        )
+
+        with self.assertRaises(VideoGenerationError):
+            client.generate_video(
+                VideoGenerationRequest(
+                    script={"meta": {"aspect_ratio": "9:16"}, "scenes": []},
+                    image_url="https://example.com/product.jpg",
+                )
+            )
+
+        self.assertEqual(opener.requests, [])
 
 
 if __name__ == "__main__":

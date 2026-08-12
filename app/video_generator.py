@@ -12,9 +12,10 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from app.script_generator import (
-    DEFAULT_API_URL,
     OpenRouterConfigurationError,
     OpenRouterRequestError,
+    ScriptValidationError,
+    validate_script_document,
 )
 
 
@@ -106,6 +107,7 @@ class OpenRouterVideoClient:
             raise VideoGenerationError("영상 생성 요청의 aspect_ratio는 9:16이어야 합니다.")
         if not request.image_url:
             raise VideoGenerationError("영상 생성에는 상품 이미지 URL이 필요합니다.")
+        self._validate_script_for_duration(request.script, request.duration_seconds)
 
         submit_response = self._request_json(
             method="POST",
@@ -152,6 +154,24 @@ class OpenRouterVideoClient:
                 )
 
         raise VideoGenerationError("영상 생성 polling 시간이 초과되었습니다.")
+
+    @staticmethod
+    def _validate_script_for_duration(
+        script: Mapping[str, Any], duration_seconds: int
+    ) -> None:
+        try:
+            validated_script = validate_script_document(
+                script, max_duration_seconds=duration_seconds
+            )
+        except ScriptValidationError as error:
+            raise VideoGenerationError(f"영상 생성용 스크립트가 올바르지 않습니다: {error}") from error
+
+        last_scene_end = validated_script["scenes"][-1]["time_range_sec"][1]
+        if last_scene_end != duration_seconds:
+            raise VideoGenerationError(
+                "스크립트의 마지막 장면 종료 시간과 영상 요청 길이가 일치하지 않습니다. "
+                f"script={last_scene_end}초, video={duration_seconds}초"
+            )
 
     def _request_json(
         self,
