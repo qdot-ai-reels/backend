@@ -21,6 +21,7 @@ from app.script_generator import (
 
 DEFAULT_VIDEO_API_URL = "https://openrouter.ai/api/v1/videos"
 DEFAULT_VIDEO_MODEL = "google/veo-3.1-lite"
+DEFAULT_SUPPORTED_DURATIONS = (4, 6, 8)
 
 
 class VideoGenerationError(RuntimeError):
@@ -77,6 +78,7 @@ class OpenRouterVideoClient:
         timeout_seconds: int = 120,
         poll_interval_seconds: float = 5.0,
         max_poll_attempts: int = 24,
+        supported_durations: tuple[int, ...] = DEFAULT_SUPPORTED_DURATIONS,
         opener: Callable[..., Any] = urlopen,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -88,6 +90,7 @@ class OpenRouterVideoClient:
         self.timeout_seconds = timeout_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.max_poll_attempts = max_poll_attempts
+        self.supported_durations = supported_durations
         self.opener = opener
         self.sleeper = sleeper
 
@@ -97,6 +100,10 @@ class OpenRouterVideoClient:
             api_key=os.getenv("OPENROUTER_API_KEY", ""),
             model=os.getenv("OPENROUTER_VIDEO_MODEL") or DEFAULT_VIDEO_MODEL,
             api_url=os.getenv("OPENROUTER_VIDEO_API_URL") or DEFAULT_VIDEO_API_URL,
+            supported_durations=tuple(
+                int(value)
+                for value in (os.getenv("OPENROUTER_VIDEO_SUPPORTED_DURATIONS") or "4,6,8").split(",")
+            ),
         )
 
     def generate_video(self, request: VideoGenerationRequest) -> VideoGenerationResult:
@@ -107,6 +114,12 @@ class OpenRouterVideoClient:
         if not request.image_url:
             raise VideoGenerationError("영상 생성에는 상품 이미지 URL이 필요합니다.")
         duration_seconds = self._validate_and_get_duration(request.script)
+        if duration_seconds not in self.supported_durations:
+            supported = ", ".join(str(value) for value in self.supported_durations)
+            raise VideoGenerationError(
+                f"선택한 모델은 {duration_seconds}초 영상을 지원하지 않습니다. "
+                f"지원 길이: {supported}초"
+            )
 
         submit_response = self._request_json(
             method="POST",

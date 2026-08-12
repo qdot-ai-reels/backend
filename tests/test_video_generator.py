@@ -115,6 +115,23 @@ class VideoGeneratorTests(unittest.TestCase):
         request_body = json.loads(opener.requests[0].data)
         self.assertEqual(request_body["duration"], 8)
 
+    def test_rejects_duration_not_supported_by_selected_model_before_api_call(self):
+        script = json.loads(json.dumps(SCRIPT))
+        script["scenes"][0]["time_range_sec"] = [0, 22]
+        opener = SequentialOpener([])
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            opener=opener,
+            supported_durations=(4, 6, 8),
+        )
+
+        with self.assertRaises(VideoGenerationError):
+            client.generate_video(
+                VideoGenerationRequest(script=script, image_url="https://example.com/product.jpg")
+            )
+
+        self.assertEqual(opener.requests, [])
+
     def test_rejects_invalid_script_before_submitting_video_job(self):
         opener = SequentialOpener([])
         client = OpenRouterVideoClient(
