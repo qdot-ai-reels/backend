@@ -101,3 +101,38 @@ Content-Type: application/json
 클라이언트는 모델 응답에서 JSON을 추출한 뒤 `scenes`, 장면 시간 범위,
 화면 설명, 자막을 검증합니다. 외부 API 호출은 네트워크와 계정의 모델별
 요청 제한 영향을 받으므로 자동화 테스트에서는 실제 API를 호출하지 않습니다.
+
+## OpenRouter 영상 생성
+
+스크립트 JSON과 상품 이미지 URL을 보내면 OpenRouter 영상 생성 작업을 요청하고,
+완료될 때까지 상태를 확인한 뒤 결과 영상 URL과 비용을 반환합니다.
+
+```text
+POST /api/v1/reels/video
+Content-Type: application/json
+```
+
+요청 본문 예시:
+
+```json
+{
+  "script": {
+    "meta": {"aspect_ratio": "9:16", "max_duration_sec": 30},
+    "scenes": [
+      {
+        "time_range_sec": [0, 3],
+        "visual": "상품을 화면 중앙에 보여준다.",
+        "subtitle": "상품 소개",
+        "voiceover": "상품을 소개합니다."
+      }
+    ]
+  },
+  "image_url": "https://example.com/product.jpg",
+  "duration_seconds": 8,
+  "resolution": "720p",
+  "aspect_ratio": "9:16",
+  "generate_audio": false
+}
+```
+
+기본 영상 모델은 `OPENROUTER_VIDEO_MODEL` 환경변수로 변경할 수 있습니다.
