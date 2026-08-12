@@ -7,7 +7,7 @@ FastAPI + PostgreSQL 로컬 개발용 Docker 환경입니다.
 ## 📁 프로젝트 구조
 
 ```text
-project-backend/
+backend/
 ├── app/
 │   ├── __init__.py
 │   └── main.py
