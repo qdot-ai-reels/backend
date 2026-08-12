@@ -42,3 +42,62 @@ docker compose up -d --build
 * **Health Check:** http://localhost:8000/health
 * **Swagger API Docs (API 문서):** http://localhost:8000/docs
 * **PostgreSQL DB 접속:** `localhost:5432`
+
+## OpenRouter 스크립트 생성
+
+`app/script_generator.py`의 `OpenRouterClient`는 공구 상품 정보를 받아
+권예빈 문서 형식의 구조화된 광고 스크립트 JSON을 생성합니다.
+
+필요한 환경변수:
+
+```bash
+OPENROUTER_API_KEY=발급받은_키
+OPENROUTER_MODEL=openai/gpt-oss-20b:free
+```
+
+사용 예시:
+
+```python
+from app.script_generator import OpenRouterClient, ScriptGenerationRequest
+
+request = ScriptGenerationRequest(
+    product={
+        "brand_name": "프랭클린",
+        "product_name": "아기 주방세제",
+        "price": 22900,
+        "discount_rate": 49,
+        "selling_points": ["EWG 그린등급", "비건 인증"],
+        "image_url": "https://example.com/product.jpg",
+    }
+)
+script = OpenRouterClient.from_env().generate_script(request)
+```
+
+FastAPI가 실행 중이면 Postman이나 Swagger에서 다음 API로도 호출할 수 있습니다.
+
+```text
+POST /api/v1/reels/script
+Content-Type: application/json
+```
+
+요청 본문 예시:
+
+```json
+{
+  "product": {
+    "brand_name": "프랭클린",
+    "product_name": "아기 주방세제",
+    "price": 22900,
+    "discount_rate": 49,
+    "selling_points": ["EWG 그린등급", "비건 인증"],
+    "image_url": "https://example.com/product.jpg"
+  },
+  "max_duration_seconds": 30,
+  "channel": "Instagram Reels",
+  "target_audience": "육아에 관심 있는 보호자"
+}
+```
+
+클라이언트는 모델 응답에서 JSON을 추출한 뒤 `scenes`, 장면 시간 범위,
+화면 설명, 자막을 검증합니다. 외부 API 호출은 네트워크와 계정의 모델별
+요청 제한 영향을 받으므로 자동화 테스트에서는 실제 API를 호출하지 않습니다.
