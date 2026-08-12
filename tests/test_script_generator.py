@@ -65,6 +65,13 @@ class ScriptGeneratorTests(unittest.TestCase):
         with self.assertRaises(ScriptValidationError):
             validate_script_document(invalid_document)
 
+    def test_rejects_script_with_wrong_aspect_ratio(self):
+        invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
+        invalid_document["meta"]["aspect_ratio"] = "9:12"
+
+        with self.assertRaises(ScriptValidationError):
+            validate_script_document(invalid_document)
+
     def test_rejects_scene_with_invalid_time_range(self):
         invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
         invalid_document["scenes"][0]["time_range_sec"] = [3, 1]

@@ -123,6 +123,10 @@ def validate_script_document(
     if not isinstance(scenes, list) or not scenes:
         raise ScriptValidationError("스크립트에는 하나 이상의 scenes가 필요합니다.")
 
+    meta = document.get("meta")
+    if not isinstance(meta, Mapping) or meta.get("aspect_ratio") != "9:16":
+        raise ScriptValidationError("스크립트의 aspect_ratio는 9:16이어야 합니다.")
+
     previous_end = 0.0
     for index, scene in enumerate(scenes, start=1):
         if not isinstance(scene, Mapping):
