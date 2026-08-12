@@ -53,6 +53,16 @@ class FakeResponse:
         return False
 
 
+class SequentialOpener:
+    def __init__(self, payloads):
+        self.payloads = iter(payloads)
+        self.requests = []
+
+    def __call__(self, request, timeout):
+        self.requests.append(request)
+        return FakeResponse(next(self.payloads))
+
+
 class ScriptGeneratorTests(unittest.TestCase):
     def test_extracts_json_from_markdown_code_fence(self):
         content = f"```json\n{json.dumps(VALID_DOCUMENT, ensure_ascii=False)}\n```"
@@ -136,6 +146,30 @@ class ScriptGeneratorTests(unittest.TestCase):
 
         with self.assertRaises(ScriptValidationError):
             client.generate_script(ScriptGenerationRequest(product=PRODUCT))
+
+    def test_retries_with_fallback_model_after_schema_failure(self):
+        invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
+        invalid_document["meta"]["aspect_ratio"] = "9:12"
+        opener = SequentialOpener([
+            {"choices": [{"message": {"content": json.dumps(invalid_document)}}]},
+            {"choices": [{"message": {"content": json.dumps(VALID_DOCUMENT)}}]},
+        ])
+        client = OpenRouterClient(
+            api_key="test-key",
+            model="openrouter/free",
+            fallback_model="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+            opener=opener,
+        )
+
+        result = client.generate_script(ScriptGenerationRequest(product=PRODUCT))
+
+        self.assertEqual(result, VALID_DOCUMENT)
+        self.assertEqual(len(opener.requests), 2)
+        self.assertEqual(json.loads(opener.requests[0].data)["model"], "openrouter/free")
+        self.assertEqual(
+            json.loads(opener.requests[1].data)["model"],
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        )
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 
 DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "openai/gpt-oss-20b:free"
+DEFAULT_FALLBACK_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
 
 
 class OpenRouterError(RuntimeError):
@@ -25,6 +26,10 @@ class OpenRouterConfigurationError(OpenRouterError):
 
 class OpenRouterRequestError(OpenRouterError):
     """Raised when OpenRouter rejects or cannot receive a request."""
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class ScriptValidationError(OpenRouterError):
@@ -163,14 +168,20 @@ class OpenRouterClient:
         self,
         api_key: str,
         model: str,
+        fallback_model: str | None = DEFAULT_FALLBACK_MODEL,
         api_url: str = DEFAULT_API_URL,
         timeout_seconds: int = 60,
+        max_attempts: int = 2,
         opener: Callable[..., Any] = urlopen,
     ) -> None:
+        if max_attempts < 1:
+            raise ValueError("max_attempts는 1 이상이어야 합니다.")
         self.api_key = api_key
         self.model = model
+        self.fallback_model = fallback_model
         self.api_url = api_url
         self.timeout_seconds = timeout_seconds
+        self.max_attempts = max_attempts
         self.opener = opener
 
     @classmethod
@@ -178,6 +189,7 @@ class OpenRouterClient:
         return cls(
             api_key=os.getenv("OPENROUTER_API_KEY", ""),
             model=os.getenv("OPENROUTER_MODEL") or DEFAULT_MODEL,
+            fallback_model=os.getenv("OPENROUTER_FALLBACK_MODEL") or DEFAULT_FALLBACK_MODEL,
             api_url=os.getenv("OPENROUTER_API_URL") or DEFAULT_API_URL,
         )
 
@@ -187,12 +199,44 @@ class OpenRouterClient:
         if not self.model:
             raise OpenRouterConfigurationError("OPENROUTER_MODEL이 설정되지 않았습니다.")
 
+        last_error: OpenRouterError | None = None
+        models = [self.model]
+        if self.fallback_model and self.fallback_model != self.model:
+            models.append(self.fallback_model)
+
+        for attempt in range(min(self.max_attempts, len(models))):
+            try:
+                return self._generate_once(request, models[attempt], attempt)
+            except ScriptValidationError as error:
+                last_error = error
+            except OpenRouterRequestError as error:
+                if error.status_code not in (429, 503):
+                    raise
+                last_error = error
+
+        assert last_error is not None
+        raise last_error
+
+    def _generate_once(
+        self, request: ScriptGenerationRequest, model: str, attempt: int
+    ) -> dict[str, Any]:
+        retry_instruction = ""
+        if attempt > 0:
+            retry_instruction = (
+                "\n이전 모델 응답이 형식 검증에 실패했습니다. "
+                "aspect_ratio는 반드시 정확히 9:16으로 작성하고, 상품 데이터에 없는 장면이나 "
+                "효능을 만들지 마세요. JSON만 반환하세요.\n"
+            )
+
         payload = {
-            "model": self.model,
+            "model": model,
             "temperature": 0.2,
             "max_tokens": 2000,
             "reasoning": {"exclude": True},
-            "messages": [{"role": "user", "content": build_script_prompt(request)}],
+            "messages": [{
+                "role": "user",
+                "content": build_script_prompt(request) + retry_instruction,
+            }],
         }
         http_request = Request(
             self.api_url,
@@ -209,7 +253,8 @@ class OpenRouterClient:
                 response_body = json.loads(response.read().decode("utf-8"))
         except HTTPError as error:
             raise OpenRouterRequestError(
-                f"OpenRouter 요청이 거부되었습니다. HTTP {error.code}"
+                f"OpenRouter 요청이 거부되었습니다. HTTP {error.code}",
+                status_code=error.code,
             ) from error
         except URLError as error:
             raise OpenRouterRequestError("OpenRouter에 연결하지 못했습니다.") from error
