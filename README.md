@@ -128,7 +128,6 @@ Content-Type: application/json
     ]
   },
   "image_url": "https://example.com/product.jpg",
-  "duration_seconds": 8,
   "resolution": "720p",
   "aspect_ratio": "9:16",
   "generate_audio": false
@@ -136,5 +135,6 @@ Content-Type: application/json
 ```
 
 기본 영상 모델은 `OPENROUTER_VIDEO_MODEL` 환경변수로 변경할 수 있습니다.
-영상 생성 요청의 `duration_seconds`는 스크립트의 마지막 장면 종료 시간과 같아야 하며,
-스크립트 형식이 올바르지 않거나 시간이 맞지 않으면 외부 API를 호출하지 않습니다.
+영상 길이는 요청 본문에서 따로 입력하지 않습니다. 백엔드가 스크립트의 마지막 장면
+종료 시간을 읽어 OpenRouter의 `duration` 값으로 전달합니다. 스크립트 형식이
+올바르지 않으면 외부 API를 호출하지 않습니다.

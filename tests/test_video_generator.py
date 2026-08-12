@@ -103,20 +103,17 @@ class VideoGeneratorTests(unittest.TestCase):
         with self.assertRaises(VideoGenerationError):
             client.generate_video(VideoGenerationRequest(script=SCRIPT, image_url="https://example.com/product.jpg"))
 
-    def test_rejects_script_when_scene_duration_does_not_match_video_duration(self):
-        opener = SequentialOpener([])
-        client = OpenRouterVideoClient(
-            api_key="test-key",
-            opener=opener,
-            sleeper=lambda _seconds: None,
-        )
+    def test_uses_last_scene_end_as_video_duration(self):
+        opener = SequentialOpener([
+            {"id": "job-1", "polling_url": "https://example.com/poll/job-1", "status": "pending"},
+            {"id": "job-1", "status": "completed", "unsigned_urls": ["https://example.com/video.mp4"]},
+        ])
+        client = OpenRouterVideoClient(api_key="test-key", opener=opener, sleeper=lambda _seconds: None)
 
-        with self.assertRaises(VideoGenerationError):
-            client.generate_video(
-                VideoGenerationRequest(script=SCRIPT, image_url="https://example.com/product.jpg", duration_seconds=3)
-            )
+        client.generate_video(VideoGenerationRequest(script=SCRIPT, image_url="https://example.com/product.jpg"))
 
-        self.assertEqual(opener.requests, [])
+        request_body = json.loads(opener.requests[0].data)
+        self.assertEqual(request_body["duration"], 8)
 
     def test_rejects_invalid_script_before_submitting_video_job(self):
         opener = SequentialOpener([])

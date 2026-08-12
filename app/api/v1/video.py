@@ -17,7 +17,6 @@ router = APIRouter()
 class VideoGenerationBody(BaseModel):
     script: dict[str, Any] = Field(min_length=1)
     image_url: str = Field(min_length=1)
-    duration_seconds: int = Field(default=8, ge=1, le=60)
     resolution: str = "720p"
     aspect_ratio: str = "9:16"
     generate_audio: bool = False
@@ -32,7 +31,6 @@ def generate_video(body: VideoGenerationBody) -> dict[str, Any]:
     request = VideoGenerationRequest(
         script=body.script,
         image_url=body.image_url,
-        duration_seconds=body.duration_seconds,
         resolution=body.resolution,
         aspect_ratio=body.aspect_ratio,
         generate_audio=body.generate_audio,

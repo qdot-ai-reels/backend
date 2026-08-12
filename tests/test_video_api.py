@@ -27,7 +27,6 @@ class VideoApiTests(unittest.TestCase):
         self.assertEqual(result["cost"], 0.24)
         request = client.generate_video.call_args.args[0]
         self.assertEqual(request.image_url, "https://example.com/product.jpg")
-        self.assertEqual(request.duration_seconds, 8)
 
 
 if __name__ == "__main__":

@@ -31,7 +31,6 @@ class VideoGenerationError(RuntimeError):
 class VideoGenerationRequest:
     script: Mapping[str, Any]
     image_url: str
-    duration_seconds: int = 8
     resolution: str = "720p"
     aspect_ratio: str = "9:16"
     generate_audio: bool = False
@@ -107,7 +106,7 @@ class OpenRouterVideoClient:
             raise VideoGenerationError("영상 생성 요청의 aspect_ratio는 9:16이어야 합니다.")
         if not request.image_url:
             raise VideoGenerationError("영상 생성에는 상품 이미지 URL이 필요합니다.")
-        self._validate_script_for_duration(request.script, request.duration_seconds)
+        duration_seconds = self._validate_and_get_duration(request.script)
 
         submit_response = self._request_json(
             method="POST",
@@ -115,7 +114,7 @@ class OpenRouterVideoClient:
             payload={
                 "model": self.model,
                 "prompt": build_video_prompt(request.script),
-                "duration": request.duration_seconds,
+                "duration": duration_seconds,
                 "resolution": request.resolution,
                 "aspect_ratio": request.aspect_ratio,
                 "generate_audio": request.generate_audio,
@@ -156,22 +155,16 @@ class OpenRouterVideoClient:
         raise VideoGenerationError("영상 생성 polling 시간이 초과되었습니다.")
 
     @staticmethod
-    def _validate_script_for_duration(
-        script: Mapping[str, Any], duration_seconds: int
-    ) -> None:
+    def _validate_and_get_duration(script: Mapping[str, Any]) -> int:
         try:
-            validated_script = validate_script_document(
-                script, max_duration_seconds=duration_seconds
-            )
+            validated_script = validate_script_document(script)
         except ScriptValidationError as error:
             raise VideoGenerationError(f"영상 생성용 스크립트가 올바르지 않습니다: {error}") from error
 
         last_scene_end = validated_script["scenes"][-1]["time_range_sec"][1]
-        if last_scene_end != duration_seconds:
-            raise VideoGenerationError(
-                "스크립트의 마지막 장면 종료 시간과 영상 요청 길이가 일치하지 않습니다. "
-                f"script={last_scene_end}초, video={duration_seconds}초"
-            )
+        if not isinstance(last_scene_end, int) or last_scene_end < 1:
+            raise VideoGenerationError("스크립트의 마지막 장면 종료 시간은 양의 정수여야 합니다.")
+        return last_scene_end
 
     def _request_json(
         self,
