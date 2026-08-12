@@ -9,6 +9,10 @@ from app.video_generator import (
     VideoGenerationError,
     VideoGenerationRequest,
 )
+from app.video_validation_pipeline import (
+    VideoValidationPipeline,
+    VideoValidationPipelineError,
+)
 
 
 router = APIRouter()
@@ -37,13 +41,18 @@ def generate_video(body: VideoGenerationBody) -> dict[str, Any]:
     )
 
     try:
-        result = OpenRouterVideoClient.from_env().generate_video(request)
+        client = OpenRouterVideoClient.from_env()
+        result = VideoValidationPipeline(
+            generate_video=lambda pipeline_request, _attempt: client.generate_video(
+                pipeline_request
+            ),
+        ).run(request)
     except OpenRouterRequestError as error:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(error),
         ) from error
-    except VideoGenerationError as error:
+    except (VideoGenerationError, VideoValidationPipelineError) as error:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(error),
@@ -53,5 +62,7 @@ def generate_video(body: VideoGenerationBody) -> dict[str, Any]:
         "job_id": result.job_id,
         "status": result.status,
         "video_url": result.video_url,
-        "cost": result.cost,
+        "cost": result.total_cost,
+        "attempts": result.attempts,
+        "validation": result.validation.checks,
     }
