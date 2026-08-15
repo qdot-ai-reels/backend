@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 # reels 라우터 import
 from app.api.v1.reels import router as reels_router
+from app.api.v1.script import router as script_router
+from app.api.v1.video import router as video_router
 
 app = FastAPI(
     title="Shorts Reels Generator API",
@@ -21,6 +23,8 @@ app.add_middleware(
 
 # Reels 라우터 등록
 app.include_router(reels_router, prefix="/api/v1/reels", tags=["reels"])
+app.include_router(script_router, prefix="/api/v1/reels", tags=["reels"])
+app.include_router(video_router, prefix="/api/v1/reels", tags=["reels"])
 
 @app.get("/health")
 def health_check():
