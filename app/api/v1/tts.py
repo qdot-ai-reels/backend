@@ -1,0 +1,60 @@
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
+
+from app.tts_generator import (
+    GoogleTTSClient,
+    NarrationValidationError,
+    SceneAudioDurationError,
+    TTSConfigurationError,
+    TTSGenerationError,
+)
+
+
+router = APIRouter()
+
+
+class TTSGenerationBody(BaseModel):
+    script: dict[str, Any] = Field(min_length=1)
+
+
+@router.post(
+    "/tts",
+    status_code=status.HTTP_200_OK,
+    response_class=Response,
+    summary="전체 스크립트의 내레이션을 하나의 MP3로 생성",
+    responses={200: {"content": {"audio/mpeg": {}}}},
+)
+def generate_narration(body: TTSGenerationBody) -> Response:
+    try:
+        audio_content = GoogleTTSClient().generate_narration(body.script)
+    except NarrationValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(error),
+        ) from error
+    except SceneAudioDurationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(error),
+        ) from error
+    except TTSConfigurationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(error),
+        ) from error
+    except TTSGenerationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(error),
+        ) from error
+
+    return Response(
+        content=audio_content,
+        media_type="audio/mpeg",
+        headers={
+            "Content-Disposition": 'attachment; filename="narration.mp3"',
+        },
+    )
