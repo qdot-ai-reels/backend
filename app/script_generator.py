@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "openai/gpt-oss-20b:free"
 DEFAULT_FALLBACK_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+DEFAULT_SYLLABLES_PER_SECOND = 4.5
 
 
 class OpenRouterError(RuntimeError):
@@ -36,6 +37,19 @@ class ScriptValidationError(OpenRouterError):
     """Raised when the model response is not a usable script document."""
 
 
+class ScriptDialogueLengthError(ScriptValidationError):
+    """Raised when a scene dialogue exceeds its expected speaking time."""
+
+    def __init__(self, scene_number: int, max_syllables: int, actual_syllables: int) -> None:
+        self.scene_number = scene_number
+        self.max_syllables = max_syllables
+        self.actual_syllables = actual_syllables
+        super().__init__(
+            f"{scene_number}번째 scene의 대사가 너무 깁니다. "
+            f"허용 음절 수: {max_syllables}개, 실제 음절 수: {actual_syllables}개"
+        )
+
+
 @dataclass(frozen=True)
 class ScriptGenerationRequest:
     product: Mapping[str, Any]
@@ -44,9 +58,22 @@ class ScriptGenerationRequest:
     target_audience: str = "육아에 관심 있는 보호자"
 
 
+def prepare_product_for_prompt(product: Mapping[str, Any]) -> dict[str, Any]:
+    """Remove fields that the team decided not to use for script generation."""
+    return {
+        key: value
+        for key, value in product.items()
+        if key != "social_posts"
+    }
+
+
 def build_script_prompt(request: ScriptGenerationRequest) -> str:
     """Build a constrained prompt from product data supplied by the caller."""
-    product_json = json.dumps(request.product, ensure_ascii=False, indent=2)
+    product_json = json.dumps(
+        prepare_product_for_prompt(request.product),
+        ensure_ascii=False,
+        indent=2,
+    )
     return f"""당신은 공동구매 광고 숏폼 스크립트 작성자입니다.
 
 아래 상품 데이터에 실제로 포함된 정보만 사용해 {request.channel}용 스크립트를 작성하세요.
@@ -61,6 +88,8 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - 영상 없이 자막만 읽어도 이해 가능
 - 첫 장면은 시선을 끌고, 마지막 장면은 구체적인 CTA를 포함
 - 자막은 짧게 작성하고 화면에 넣을 문구와 내레이션을 구분
+- 대사는 장면 시간 안에 읽을 수 있도록 작성하고, 평균 1초당 4.5음절을 기준으로 계산
+- 각 장면의 대사 음절 수가 해당 장면 시간 x 4.5를 넘지 않도록 작성
 
 다음 JSON 객체만 반환하세요. Markdown 코드블록이나 설명은 붙이지 마세요.
 {{
@@ -158,7 +187,38 @@ def validate_script_document(
             )
         previous_end = float(time_range[1])
 
+    validate_dialogue_lengths(document)
+
     return dict(document)
+
+
+def count_speech_syllables(text: str) -> int:
+    """Count spoken characters while ignoring whitespace and punctuation."""
+    return sum(1 for character in text if character.isalnum())
+
+
+def validate_dialogue_lengths(
+    document: Mapping[str, Any],
+    syllables_per_second: float = DEFAULT_SYLLABLES_PER_SECOND,
+) -> None:
+    """Validate dialogue length before the script is passed to later tasks."""
+    if syllables_per_second <= 0:
+        raise ValueError("syllables_per_second는 0보다 커야 합니다.")
+
+    scenes = document.get("scenes") or []
+    for index, scene in enumerate(scenes, start=1):
+        voiceover = scene.get("voiceover")
+        if not isinstance(voiceover, str) or not voiceover.strip():
+            continue
+        start, end = scene["time_range_sec"]
+        max_syllables = max(1, int((end - start) * syllables_per_second))
+        actual_syllables = count_speech_syllables(voiceover)
+        if actual_syllables > max_syllables:
+            raise ScriptDialogueLengthError(
+                scene_number=int(scene.get("scene_number", index)),
+                max_syllables=max_syllables,
+                actual_syllables=actual_syllables,
+            )
 
 
 class OpenRouterClient:

@@ -31,7 +31,7 @@ VALID_DOCUMENT = {
             "time_range_sec": [0, 3],
             "visual": "제품을 화면 중앙에 보여준다.",
             "subtitle": "아기 식기 세제",
-            "voiceover": "아기 식기 세제, 성분부터 확인해 보세요.",
+            "voiceover": "성분 확인하세요.",
             "intent": "hook",
         }
     ],
@@ -96,6 +96,14 @@ class ScriptGeneratorTests(unittest.TestCase):
         with self.assertRaises(ScriptValidationError):
             validate_script_document(invalid_document, max_duration_seconds=30)
 
+    def test_rejects_scene_dialogue_longer_than_time_range(self):
+        invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
+        invalid_document["scenes"][0]["time_range_sec"] = [0, 1]
+        invalid_document["scenes"][0]["voiceover"] = "이 장면에서 읽기에는 너무 긴 광고 대사입니다."
+
+        with self.assertRaises(ScriptValidationError):
+            validate_script_document(invalid_document)
+
     def test_requires_api_key_before_calling_openrouter(self):
         client = OpenRouterClient(api_key="", model="openai/gpt-oss-20b:free")
 
@@ -136,6 +144,37 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertEqual(body["model"], "openai/gpt-oss-20b:free")
         self.assertEqual(body["reasoning"], {"exclude": True})
         self.assertIn("프랭클린", body["messages"][0]["content"])
+        self.assertIn("4.5음절", body["messages"][0]["content"])
+
+    def test_excludes_social_posts_from_product_prompt(self):
+        response_payload = {
+            "choices": [{
+                "message": {
+                    "content": json.dumps(VALID_DOCUMENT, ensure_ascii=False)
+                }
+            }]
+        }
+        captured = {}
+
+        def fake_opener(request, timeout):
+            captured["request"] = request
+            return FakeResponse(response_payload)
+
+        product = {
+            **PRODUCT,
+            "social_posts": [{"content": "사용자 게시물"}],
+        }
+        client = OpenRouterClient(
+            api_key="test-key",
+            model="openai/gpt-oss-20b:free",
+            opener=fake_opener,
+        )
+
+        client.generate_script(ScriptGenerationRequest(product=product))
+
+        prompt = json.loads(captured["request"].data)["messages"][0]["content"]
+        self.assertNotIn("social_posts", prompt)
+        self.assertNotIn("사용자 게시물", prompt)
 
     def test_rejects_openrouter_response_without_content(self):
         client = OpenRouterClient(
@@ -170,6 +209,49 @@ class ScriptGeneratorTests(unittest.TestCase):
             json.loads(opener.requests[1].data)["model"],
             "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
         )
+
+    def test_retries_with_fallback_model_after_dialogue_length_failure(self):
+        invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
+        invalid_document["scenes"][0]["time_range_sec"] = [0, 1]
+        invalid_document["scenes"][0]["voiceover"] = "이 장면에서 읽기에는 너무 긴 광고 대사입니다."
+        opener = SequentialOpener([
+            {"choices": [{"message": {"content": json.dumps(invalid_document)}}]},
+            {"choices": [{"message": {"content": json.dumps(VALID_DOCUMENT)}}]},
+        ])
+        client = OpenRouterClient(
+            api_key="test-key",
+            model="openrouter/free",
+            fallback_model="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+            opener=opener,
+        )
+
+        result = client.generate_script(ScriptGenerationRequest(product=PRODUCT))
+
+        self.assertEqual(result, VALID_DOCUMENT)
+        self.assertEqual(len(opener.requests), 2)
+
+    def test_retries_by_requesting_a_new_complete_script_after_dialogue_failure(self):
+        invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
+        invalid_document["scenes"][0]["time_range_sec"] = [0, 1]
+        invalid_document["scenes"][0]["voiceover"] = "이 장면에서 읽기에는 너무 긴 광고 대사입니다."
+        opener = SequentialOpener([
+            {"choices": [{"message": {"content": json.dumps(invalid_document)}}]},
+            {"choices": [{"message": {"content": json.dumps(VALID_DOCUMENT)}}]},
+        ])
+        client = OpenRouterClient(
+            api_key="test-key",
+            model="openrouter/free",
+            fallback_model="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+            opener=opener,
+        )
+
+        client.generate_script(ScriptGenerationRequest(product=PRODUCT))
+
+        first_prompt = json.loads(opener.requests[0].data)["messages"][0]["content"]
+        second_prompt = json.loads(opener.requests[1].data)["messages"][0]["content"]
+        self.assertIn('"scenes"', first_prompt)
+        self.assertIn('"scenes"', second_prompt)
+        self.assertIn("이전 모델 응답이 형식 검증에 실패했습니다", second_prompt)
 
 
 if __name__ == "__main__":
