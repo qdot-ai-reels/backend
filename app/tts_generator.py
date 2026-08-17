@@ -34,6 +34,8 @@ class SceneAudioDurationError(TTSGenerationError):
         self.scene_number = scene_number
         self.expected_seconds = expected_seconds
         self.actual_seconds = actual_seconds
+        self.retryable = True
+        self.next_step = "regenerate_script"
         super().__init__(
             f"{scene_number}번째 장면 음성이 너무 깁니다. "
             f"허용 시간: {expected_seconds:.2f}초, "
