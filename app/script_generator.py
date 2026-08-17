@@ -69,6 +69,7 @@ def prepare_product_for_prompt(product: Mapping[str, Any]) -> dict[str, Any]:
 
 def build_script_prompt(request: ScriptGenerationRequest) -> str:
     """Build a constrained prompt from product data supplied by the caller."""
+    has_usp = request.product.get("usp") not in (None, "")
     product_json = json.dumps(
         prepare_product_for_prompt(request.product),
         ensure_ascii=False,
@@ -90,6 +91,7 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - 자막은 짧게 작성하고 화면에 넣을 문구와 내레이션을 구분
 - 대사는 장면 시간 안에 읽을 수 있도록 작성하고, 평균 1초당 4.5음절을 기준으로 계산
 - 각 장면의 대사 음절 수가 해당 장면 시간 x 4.5를 넘지 않도록 작성
+{"- USP가 비어있거나 null인 경우, 상품 데이터의 다른 정보만을 바탕으로 소비자의 구매를 유도할 수 있는 핵심 소구점(USP)을 도출해 최종 스크립트에 반영하세요." if not has_usp else ""}
 
 다음 JSON 객체만 반환하세요. Markdown 코드블록이나 설명은 붙이지 마세요.
 {{
@@ -160,6 +162,14 @@ def validate_script_document(
     meta = document.get("meta")
     if not isinstance(meta, Mapping) or meta.get("aspect_ratio") != "9:16":
         raise ScriptValidationError("스크립트의 aspect_ratio는 9:16이어야 합니다.")
+    if not isinstance(meta.get("max_duration_sec"), (int, float)):
+        raise ScriptValidationError("스크립트의 max_duration_sec가 필요합니다.")
+    if not isinstance(meta.get("channel"), str) or not meta["channel"].strip():
+        raise ScriptValidationError("스크립트의 channel이 필요합니다.")
+    if not isinstance(document.get("summary"), str):
+        raise ScriptValidationError("스크립트의 summary가 필요합니다.")
+    if not isinstance(document.get("compliance_notes"), list):
+        raise ScriptValidationError("스크립트의 compliance_notes가 필요합니다.")
 
     previous_end = 0.0
     for index, scene in enumerate(scenes, start=1):
@@ -181,9 +191,26 @@ def validate_script_document(
             raise ScriptValidationError(
                 f"{index}번째 scene의 time_range_sec가 올바르지 않습니다."
             )
-        if not scene.get("visual") or not scene.get("subtitle"):
+        required_fields = ("scene_number", "visual", "subtitle", "voiceover", "intent")
+        if any(field not in scene for field in required_fields):
             raise ScriptValidationError(
-                f"{index}번째 scene에는 visual과 subtitle이 필요합니다."
+                f"{index}번째 scene에 필수 출력 필드가 누락되었습니다."
+            )
+        if not isinstance(scene.get("scene_number"), int):
+            raise ScriptValidationError(f"{index}번째 scene의 scene_number가 올바르지 않습니다.")
+        if not isinstance(scene.get("visual"), str) or not scene["visual"].strip():
+            raise ScriptValidationError(
+                f"{index}번째 scene의 visual이 필요합니다."
+            )
+        if not isinstance(scene.get("subtitle"), str) or not scene["subtitle"].strip():
+            raise ScriptValidationError(f"{index}번째 scene의 subtitle이 필요합니다.")
+        if scene.get("voiceover") is not None and not isinstance(scene["voiceover"], str):
+            raise ScriptValidationError(
+                f"{index}번째 scene의 voiceover는 문자열 또는 null이어야 합니다."
+            )
+        if scene.get("intent") not in {"hook", "body", "cta"}:
+            raise ScriptValidationError(
+                f"{index}번째 scene의 intent는 hook, body, cta 중 하나여야 합니다."
             )
         previous_end = float(time_range[1])
 

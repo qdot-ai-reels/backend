@@ -7,6 +7,7 @@ from app.script_generator import (
     OpenRouterConfigurationError,
     ScriptGenerationRequest,
     ScriptValidationError,
+    build_script_prompt,
     extract_script_json,
     validate_script_document,
 )
@@ -23,7 +24,11 @@ PRODUCT = {
 
 
 VALID_DOCUMENT = {
-    "meta": {"aspect_ratio": "9:16", "max_duration_sec": 30},
+    "meta": {
+        "aspect_ratio": "9:16",
+        "max_duration_sec": 30,
+        "channel": "Instagram Reels",
+    },
     "summary": "아기 식기를 위한 주방세제를 소개합니다.",
     "scenes": [
         {
@@ -145,6 +150,52 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertEqual(body["reasoning"], {"exclude": True})
         self.assertIn("프랭클린", body["messages"][0]["content"])
         self.assertIn("4.5음절", body["messages"][0]["content"])
+
+    def test_asks_model_to_derive_missing_usp_without_mutating_product(self):
+        response_payload = {
+            "choices": [{
+                "message": {
+                    "content": json.dumps(VALID_DOCUMENT, ensure_ascii=False)
+                }
+            }]
+        }
+        captured = {}
+
+        def fake_opener(request, timeout):
+            captured["request"] = request
+            return FakeResponse(response_payload)
+
+        product = {**PRODUCT, "usp": None}
+        client = OpenRouterClient(
+            api_key="test-key",
+            model="openai/gpt-oss-20b:free",
+            opener=fake_opener,
+        )
+        client.generate_script(ScriptGenerationRequest(product=product))
+
+        prompt = json.loads(captured["request"].data)["messages"][0]["content"]
+        self.assertIn("USP가 비어있거나 null인 경우", prompt)
+        self.assertIn("상품 데이터의 다른 정보만을 바탕으로", prompt)
+        self.assertIsNone(product["usp"])
+
+    def test_does_not_ask_to_derive_usp_when_product_has_usp(self):
+        request = ScriptGenerationRequest(product={**PRODUCT, "usp": "안심 세척"})
+
+        prompt = build_script_prompt(request)
+
+        self.assertNotIn("USP가 비어있거나 null인 경우", prompt)
+        self.assertIn("안심 세척", prompt)
+
+    def test_accepts_null_voiceover_but_requires_script_output_fields(self):
+        document = json.loads(json.dumps(VALID_DOCUMENT))
+        document["scenes"][0]["voiceover"] = None
+
+        self.assertEqual(validate_script_document(document), document)
+
+        missing_field = json.loads(json.dumps(document))
+        del missing_field["scenes"][0]["voiceover"]
+        with self.assertRaises(ScriptValidationError):
+            validate_script_document(missing_field)
 
     def test_excludes_social_posts_from_product_prompt(self):
         response_payload = {

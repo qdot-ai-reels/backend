@@ -38,7 +38,14 @@ def generate_narration(body: TTSGenerationBody) -> Response:
     except SceneAudioDurationError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(error),
+            detail={
+                "message": str(error),
+                "retryable": error.retryable,
+                "next_step": error.next_step,
+                "scene_number": error.scene_number,
+                "expected_seconds": error.expected_seconds,
+                "actual_seconds": error.actual_seconds,
+            },
         ) from error
     except TTSConfigurationError as error:
         raise HTTPException(

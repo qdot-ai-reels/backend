@@ -11,7 +11,11 @@ from app.video_generator import (
 
 
 SCRIPT = {
-    "meta": {"aspect_ratio": "9:16", "max_duration_sec": 30},
+    "meta": {
+        "aspect_ratio": "9:16",
+        "max_duration_sec": 30,
+        "channel": "Instagram Reels",
+    },
     "summary": "상품을 소개하는 영상",
     "scenes": [
         {
@@ -23,6 +27,7 @@ SCRIPT = {
             "intent": "hook",
         }
     ],
+    "compliance_notes": [],
 }
 
 

@@ -107,6 +107,25 @@ class TTSGeneratorTests(unittest.TestCase):
         self.assertIsNone(combine_calls[0][0].audio_content)
         self.assertEqual(combine_calls[0][0].end_seconds, 3.0)
 
+    def test_supports_arbitrary_scene_durations_not_fixed_presets(self):
+        synth_calls = []
+        script = {
+            "scenes": [
+                {"scene_number": 1, "time_range_sec": [0, 2.5], "voiceover": None},
+                {"scene_number": 2, "time_range_sec": [2.5, 5.75], "voiceover": "두 번째 장면입니다."},
+                {"scene_number": 3, "time_range_sec": [5.75, 11.3], "voiceover": "마지막 장면입니다."},
+            ]
+        }
+
+        client = GoogleTTSClient(
+            synthesizer=lambda text: synth_calls.append(text) or b"audio",
+            combiner=lambda _scenes: b"combined",
+            duration_reader=lambda _audio: 1.0,
+        )
+
+        self.assertEqual(client.generate_narration(script), b"combined")
+        self.assertEqual(synth_calls, ["두 번째 장면입니다.", "마지막 장면입니다."])
+
     def test_rejects_scene_audio_longer_than_its_time_range(self):
         client = GoogleTTSClient(
             synthesizer=lambda _text: b"audio",
