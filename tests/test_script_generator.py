@@ -186,6 +186,20 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertNotIn("USP가 비어있거나 null인 경우", prompt)
         self.assertIn("안심 세척", prompt)
 
+    def test_asks_to_derive_usp_when_product_usp_is_only_whitespace(self):
+        request = ScriptGenerationRequest(product={**PRODUCT, "usp": "   "})
+
+        prompt = build_script_prompt(request)
+
+        self.assertIn("USP가 비어있거나 null인 경우", prompt)
+
+    def test_rejects_script_when_meta_duration_does_not_match_request(self):
+        document = json.loads(json.dumps(VALID_DOCUMENT))
+        document["meta"]["max_duration_sec"] = 8
+
+        with self.assertRaises(ScriptValidationError):
+            validate_script_document(document, max_duration_seconds=30)
+
     def test_accepts_null_voiceover_but_requires_script_output_fields(self):
         document = json.loads(json.dumps(VALID_DOCUMENT))
         document["scenes"][0]["voiceover"] = None

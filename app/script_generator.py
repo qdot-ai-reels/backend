@@ -69,7 +69,8 @@ def prepare_product_for_prompt(product: Mapping[str, Any]) -> dict[str, Any]:
 
 def build_script_prompt(request: ScriptGenerationRequest) -> str:
     """Build a constrained prompt from product data supplied by the caller."""
-    has_usp = request.product.get("usp") not in (None, "")
+    usp = request.product.get("usp")
+    has_usp = usp is not None and (not isinstance(usp, str) or bool(usp.strip()))
     product_json = json.dumps(
         prepare_product_for_prompt(request.product),
         ensure_ascii=False,
@@ -164,6 +165,13 @@ def validate_script_document(
         raise ScriptValidationError("스크립트의 aspect_ratio는 9:16이어야 합니다.")
     if not isinstance(meta.get("max_duration_sec"), (int, float)):
         raise ScriptValidationError("스크립트의 max_duration_sec가 필요합니다.")
+    if (
+        max_duration_seconds is not None
+        and meta["max_duration_sec"] != max_duration_seconds
+    ):
+        raise ScriptValidationError(
+            "스크립트의 max_duration_sec가 요청한 최대 시간과 다릅니다."
+        )
     if not isinstance(meta.get("channel"), str) or not meta["channel"].strip():
         raise ScriptValidationError("스크립트의 channel이 필요합니다.")
     if not isinstance(document.get("summary"), str):
