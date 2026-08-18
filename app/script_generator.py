@@ -15,6 +15,7 @@ DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "openai/gpt-oss-20b:free"
 DEFAULT_FALLBACK_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
 DEFAULT_SYLLABLES_PER_SECOND = 4.5
+MAX_SCRIPT_DURATION_SECONDS = 30
 
 
 class OpenRouterError(RuntimeError):
@@ -57,6 +58,12 @@ class ScriptGenerationRequest:
     channel: str = "Instagram Reels"
     target_audience: str = "육아에 관심 있는 보호자"
 
+    def __post_init__(self) -> None:
+        if not 1 <= self.max_duration_seconds <= MAX_SCRIPT_DURATION_SECONDS:
+            raise ValueError(
+                f"max_duration_seconds는 1초 이상 {MAX_SCRIPT_DURATION_SECONDS}초 이하여야 합니다."
+            )
+
 
 def prepare_product_for_prompt(product: Mapping[str, Any]) -> dict[str, Any]:
     """Remove fields that the team decided not to use for script generation."""
@@ -97,22 +104,33 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 다음 JSON 객체만 반환하세요. Markdown 코드블록이나 설명은 붙이지 마세요.
 {{
   "meta": {{
-    "aspect_ratio": "9:16",
-    "max_duration_sec": {request.max_duration_seconds},
-    "channel": "{request.channel}"
+    "output_format_version": "1.0",
+    "framework": "Hook-Body-CTA",
+    "language": "ko"
   }},
-  "summary": "스크립트 전체 방향",
+  "summary": {{
+    "main_target": "주요 타깃",
+    "pain_point": "타깃의 고민",
+    "product_usp": "제품의 핵심 USP",
+    "key_message": "영상의 핵심 메시지",
+    "tone_and_manner": "영상 분위기"
+  }},
   "scenes": [
     {{
-      "scene_number": 1,
-      "time_range_sec": [0, 3],
+      "scene_name": "Hook",
+      "time_range_sec": {{"start": 0, "end": 3}},
       "visual": "화면에 보일 장면과 행동",
-      "subtitle": "화면 자막",
-      "voiceover": "내레이션",
-      "intent": "hook|body|cta"
+      "auditory": {{
+        "subtitle": "화면 자막",
+        "voiceover": "내레이션"
+      }},
+      "notes": "연출 의도"
     }}
   ],
-  "compliance_notes": ["사용한 근거와 주의사항"]
+  "compliance_notes": {{
+    "avoid": ["피해야 할 내용"],
+    "focus": ["강조할 내용"]
+  }}
 }}
 
 타깃: {request.target_audience}
@@ -161,66 +179,81 @@ def validate_script_document(
         raise ScriptValidationError("스크립트에는 하나 이상의 scenes가 필요합니다.")
 
     meta = document.get("meta")
-    if not isinstance(meta, Mapping) or meta.get("aspect_ratio") != "9:16":
-        raise ScriptValidationError("스크립트의 aspect_ratio는 9:16이어야 합니다.")
-    if not isinstance(meta.get("max_duration_sec"), (int, float)):
-        raise ScriptValidationError("스크립트의 max_duration_sec가 필요합니다.")
-    if (
-        max_duration_seconds is not None
-        and meta["max_duration_sec"] != max_duration_seconds
+    if not isinstance(meta, Mapping):
+        raise ScriptValidationError("스크립트의 meta가 필요합니다.")
+    for field in ("output_format_version", "framework", "language"):
+        if not isinstance(meta.get(field), str) or not meta[field].strip():
+            raise ScriptValidationError(f"스크립트의 meta.{field}가 필요합니다.")
+
+    summary = document.get("summary")
+    if not isinstance(summary, Mapping):
+        raise ScriptValidationError("스크립트의 summary는 객체여야 합니다.")
+    for field in (
+        "main_target",
+        "pain_point",
+        "product_usp",
+        "key_message",
+        "tone_and_manner",
     ):
-        raise ScriptValidationError(
-            "스크립트의 max_duration_sec가 요청한 최대 시간과 다릅니다."
-        )
-    if not isinstance(meta.get("channel"), str) or not meta["channel"].strip():
-        raise ScriptValidationError("스크립트의 channel이 필요합니다.")
-    if not isinstance(document.get("summary"), str):
-        raise ScriptValidationError("스크립트의 summary가 필요합니다.")
-    if not isinstance(document.get("compliance_notes"), list):
-        raise ScriptValidationError("스크립트의 compliance_notes가 필요합니다.")
+        if not isinstance(summary.get(field), str):
+            raise ScriptValidationError(f"스크립트의 summary.{field}가 필요합니다.")
+
+    compliance_notes = document.get("compliance_notes")
+    if not isinstance(compliance_notes, Mapping):
+        raise ScriptValidationError("스크립트의 compliance_notes는 객체여야 합니다.")
+    for field in ("avoid", "focus"):
+        if not isinstance(compliance_notes.get(field), list):
+            raise ScriptValidationError(
+                f"스크립트의 compliance_notes.{field}가 필요합니다."
+            )
 
     previous_end = 0.0
     for index, scene in enumerate(scenes, start=1):
         if not isinstance(scene, Mapping):
             raise ScriptValidationError(f"{index}번째 scene이 JSON 객체가 아닙니다.")
         time_range = scene.get("time_range_sec")
-        if (
-            not isinstance(time_range, list)
-            or len(time_range) != 2
-            or not all(isinstance(value, (int, float)) for value in time_range)
-            or time_range[0] < 0
-            or time_range[1] <= time_range[0]
-            or time_range[0] < previous_end
-            or (
-                max_duration_seconds is not None
-                and time_range[1] > max_duration_seconds
+        if not isinstance(time_range, Mapping):
+            raise ScriptValidationError(
+                f"{index}번째 scene의 time_range_sec는 객체여야 합니다."
             )
+        start = time_range.get("start")
+        end = time_range.get("end")
+        if (
+            not isinstance(start, (int, float))
+            or not isinstance(end, (int, float))
+            or start < 0
+            or end <= start
+            or start < previous_end
+            or (max_duration_seconds is not None and end > max_duration_seconds)
         ):
             raise ScriptValidationError(
                 f"{index}번째 scene의 time_range_sec가 올바르지 않습니다."
             )
-        required_fields = ("scene_number", "visual", "subtitle", "voiceover", "intent")
+        required_fields = ("scene_name", "visual", "auditory", "notes")
         if any(field not in scene for field in required_fields):
             raise ScriptValidationError(
                 f"{index}번째 scene에 필수 출력 필드가 누락되었습니다."
             )
-        if not isinstance(scene.get("scene_number"), int):
-            raise ScriptValidationError(f"{index}번째 scene의 scene_number가 올바르지 않습니다.")
+        if not isinstance(scene.get("scene_name"), str) or not scene["scene_name"].strip():
+            raise ScriptValidationError(f"{index}번째 scene의 scene_name이 필요합니다.")
         if not isinstance(scene.get("visual"), str) or not scene["visual"].strip():
             raise ScriptValidationError(
                 f"{index}번째 scene의 visual이 필요합니다."
             )
-        if not isinstance(scene.get("subtitle"), str) or not scene["subtitle"].strip():
+        auditory = scene.get("auditory")
+        if not isinstance(auditory, Mapping):
+            raise ScriptValidationError(f"{index}번째 scene의 auditory가 필요합니다.")
+        if "voiceover" not in auditory:
+            raise ScriptValidationError(f"{index}번째 scene의 voiceover가 필요합니다.")
+        if not isinstance(auditory.get("subtitle"), str):
             raise ScriptValidationError(f"{index}번째 scene의 subtitle이 필요합니다.")
-        if scene.get("voiceover") is not None and not isinstance(scene["voiceover"], str):
+        if auditory.get("voiceover") is not None and not isinstance(auditory["voiceover"], str):
             raise ScriptValidationError(
                 f"{index}번째 scene의 voiceover는 문자열 또는 null이어야 합니다."
             )
-        if scene.get("intent") not in {"hook", "body", "cta"}:
-            raise ScriptValidationError(
-                f"{index}번째 scene의 intent는 hook, body, cta 중 하나여야 합니다."
-            )
-        previous_end = float(time_range[1])
+        if not isinstance(scene.get("notes"), str):
+            raise ScriptValidationError(f"{index}번째 scene의 notes가 필요합니다.")
+        previous_end = float(end)
 
     validate_dialogue_lengths(document)
 
@@ -242,15 +275,18 @@ def validate_dialogue_lengths(
 
     scenes = document.get("scenes") or []
     for index, scene in enumerate(scenes, start=1):
-        voiceover = scene.get("voiceover")
+        auditory = scene.get("auditory") or {}
+        voiceover = auditory.get("voiceover")
         if not isinstance(voiceover, str) or not voiceover.strip():
             continue
-        start, end = scene["time_range_sec"]
+        time_range = scene["time_range_sec"]
+        start = time_range["start"]
+        end = time_range["end"]
         max_syllables = max(1, int((end - start) * syllables_per_second))
         actual_syllables = count_speech_syllables(voiceover)
         if actual_syllables > max_syllables:
             raise ScriptDialogueLengthError(
-                scene_number=int(scene.get("scene_number", index)),
+                scene_number=index,
                 max_syllables=max_syllables,
                 actual_syllables=actual_syllables,
             )
@@ -319,8 +355,8 @@ class OpenRouterClient:
         if attempt > 0:
             retry_instruction = (
                 "\n이전 모델 응답이 형식 검증에 실패했습니다. "
-                "aspect_ratio는 반드시 정확히 9:16으로 작성하고, 상품 데이터에 없는 장면이나 "
-                "효능을 만들지 마세요. JSON만 반환하세요.\n"
+                "영상은 9:16 세로형 조건을 따르되 설정값을 meta에 추가하지 말고, "
+                "상품 데이터에 없는 장면이나 효능을 만들지 마세요. JSON만 반환하세요.\n"
             )
 
         payload = {

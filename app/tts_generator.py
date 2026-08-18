@@ -64,17 +64,25 @@ def build_scene_narrations(script: Mapping[str, Any]) -> list[SceneNarration]:
         if not isinstance(scene, Mapping):
             raise NarrationValidationError(f"{index}번째 scene이 JSON 객체가 아닙니다.")
         time_range = scene.get("time_range_sec")
+        if isinstance(time_range, Mapping):
+            start = time_range.get("start")
+            end = time_range.get("end")
+        else:
+            start = end = None
         if (
-            not isinstance(time_range, list)
-            or len(time_range) != 2
-            or not all(isinstance(value, (int, float)) for value in time_range)
-            or time_range[0] < previous_end
-            or time_range[1] <= time_range[0]
+            not isinstance(time_range, Mapping)
+            or not isinstance(start, (int, float))
+            or not isinstance(end, (int, float))
+            or start < previous_end
+            or end <= start
         ):
             raise NarrationValidationError(
                 f"{index}번째 scene의 time_range_sec가 올바르지 않습니다."
             )
-        voiceover = scene.get("voiceover")
+        auditory = scene.get("auditory")
+        if not isinstance(auditory, Mapping):
+            raise NarrationValidationError(f"{index}번째 scene의 auditory가 필요합니다.")
+        voiceover = auditory.get("voiceover")
         if voiceover is None:
             voiceover = ""
         elif not isinstance(voiceover, str):
@@ -83,13 +91,13 @@ def build_scene_narrations(script: Mapping[str, Any]) -> list[SceneNarration]:
             )
         narrations.append(
             SceneNarration(
-                scene_number=int(scene.get("scene_number", index)),
-                start_seconds=float(time_range[0]),
-                end_seconds=float(time_range[1]),
+                scene_number=index,
+                start_seconds=float(start),
+                end_seconds=float(end),
                 text=voiceover.strip(),
             )
         )
-        previous_end = float(time_range[1])
+        previous_end = float(end)
 
     return narrations
 

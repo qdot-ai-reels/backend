@@ -18,8 +18,8 @@ class TTSApiTests(unittest.TestCase):
             TTSGenerationBody(
                 script={
                     "scenes": [
-                        {"voiceover": "첫 장면"},
-                        {"voiceover": "마지막 장면"},
+                        {"time_range_sec": {"start": 0, "end": 3}, "auditory": {"voiceover": "첫 장면"}},
+                        {"time_range_sec": {"start": 3, "end": 6}, "auditory": {"voiceover": "마지막 장면"}},
                     ]
                 }
             )

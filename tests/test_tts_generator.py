@@ -11,9 +11,9 @@ from app.tts_generator import (
 
 SCRIPT = {
     "scenes": [
-        {"scene_number": 1, "time_range_sec": [0, 3], "voiceover": "첫 번째 장면입니다."},
-        {"scene_number": 2, "time_range_sec": [3, 6], "voiceover": "두 번째 장면입니다."},
-        {"scene_number": 3, "time_range_sec": [6, 8], "voiceover": "지금 확인해 보세요."},
+        {"time_range_sec": {"start": 0, "end": 3}, "auditory": {"voiceover": "첫 번째 장면입니다."}},
+        {"time_range_sec": {"start": 3, "end": 6}, "auditory": {"voiceover": "두 번째 장면입니다."}},
+        {"time_range_sec": {"start": 6, "end": 8}, "auditory": {"voiceover": "지금 확인해 보세요."}},
     ]
 }
 
@@ -33,8 +33,8 @@ class TTSGeneratorTests(unittest.TestCase):
         narrations = build_scene_narrations(
             {
                 "scenes": [
-                    {"scene_number": 1, "time_range_sec": [0, 3], "voiceover": None},
-                    {"scene_number": 2, "time_range_sec": [3, 6], "voiceover": "다음 장면입니다."},
+                    {"time_range_sec": {"start": 0, "end": 3}, "auditory": {"voiceover": None}},
+                    {"time_range_sec": {"start": 3, "end": 6}, "auditory": {"voiceover": "다음 장면입니다."}},
                 ]
             }
         )
@@ -48,8 +48,8 @@ class TTSGeneratorTests(unittest.TestCase):
             build_scene_narrations(
                 {
                     "scenes": [
-                        {"time_range_sec": [0, 3], "voiceover": "첫 장면"},
-                        {"time_range_sec": [2, 5], "voiceover": "겹치는 장면"},
+                        {"time_range_sec": {"start": 0, "end": 3}, "auditory": {"voiceover": "첫 장면"}},
+                        {"time_range_sec": {"start": 2, "end": 5}, "auditory": {"voiceover": "겹치는 장면"}},
                     ]
                 }
             )
@@ -91,8 +91,8 @@ class TTSGeneratorTests(unittest.TestCase):
         combine_calls = []
         script = {
             "scenes": [
-                {"scene_number": 1, "time_range_sec": [0, 3], "voiceover": None},
-                {"scene_number": 2, "time_range_sec": [3, 6], "voiceover": "말하는 장면입니다."},
+                {"time_range_sec": {"start": 0, "end": 3}, "auditory": {"voiceover": None}},
+                {"time_range_sec": {"start": 3, "end": 6}, "auditory": {"voiceover": "말하는 장면입니다."}},
             ]
         }
 
@@ -111,9 +111,9 @@ class TTSGeneratorTests(unittest.TestCase):
         synth_calls = []
         script = {
             "scenes": [
-                {"scene_number": 1, "time_range_sec": [0, 2.5], "voiceover": None},
-                {"scene_number": 2, "time_range_sec": [2.5, 5.75], "voiceover": "두 번째 장면입니다."},
-                {"scene_number": 3, "time_range_sec": [5.75, 11.3], "voiceover": "마지막 장면입니다."},
+                {"time_range_sec": {"start": 0, "end": 2.5}, "auditory": {"voiceover": None}},
+                {"time_range_sec": {"start": 2.5, "end": 5.75}, "auditory": {"voiceover": "두 번째 장면입니다."}},
+                {"time_range_sec": {"start": 5.75, "end": 11.3}, "auditory": {"voiceover": "마지막 장면입니다."}},
             ]
         }
 
@@ -150,15 +150,14 @@ class TTSGeneratorTests(unittest.TestCase):
         long_script = {
             "scenes": [
                 {
-                    "scene_number": 1,
-                    "time_range_sec": [0, 1],
-                    "voiceover": "이 문장은 일 초 안에 읽기에는 너무 긴 광고 내레이션입니다.",
+                    "time_range_sec": {"start": 0, "end": 1},
+                    "auditory": {"voiceover": "이 문장은 일 초 안에 읽기에는 너무 긴 광고 내레이션입니다."},
                 }
             ]
         }
 
         self.assertEqual(client.generate_narration(long_script), b"combined")
-        self.assertEqual(calls, [long_script["scenes"][0]["voiceover"]])
+        self.assertEqual(calls, [long_script["scenes"][0]["auditory"]["voiceover"]])
 
 if __name__ == "__main__":
     unittest.main()
