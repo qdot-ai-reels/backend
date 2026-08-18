@@ -54,6 +54,9 @@ class ScriptDialogueLengthError(ScriptValidationError):
 @dataclass(frozen=True)
 class ScriptGenerationRequest:
     product: Mapping[str, Any]
+    image_url: str | None = None
+    reviews: list[Any] | None = None
+    custom_prompt: str | None = None
     max_duration_seconds: int = 30
     channel: str = "Instagram Reels"
     target_audience: str = "육아에 관심 있는 보호자"
@@ -84,6 +87,14 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
         ensure_ascii=False,
         indent=2,
     )
+    reviews_json = json.dumps(request.reviews or [], ensure_ascii=False, indent=2)
+    custom_prompt = request.custom_prompt.strip() if request.custom_prompt else ""
+    custom_instruction = (
+        "- 아래 추가 프롬프트의 지시도 반영하세요.\n"
+        f"추가 프롬프트: {custom_prompt}"
+        if custom_prompt
+        else ""
+    )
     return f"""당신은 공동구매 광고 숏폼 스크립트 작성자입니다.
 
 아래 상품 데이터에 실제로 포함된 정보만 사용해 {request.channel}용 스크립트를 작성하세요.
@@ -100,6 +111,7 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - 자막은 짧게 작성하고 화면에 넣을 문구와 내레이션을 구분
 - 대사는 장면 시간 안에 읽을 수 있도록 작성하고, 평균 1초당 4.5음절을 기준으로 계산
 - 각 장면의 대사 음절 수가 해당 장면 시간 x 4.5를 넘지 않도록 작성
+{custom_instruction}
 {"- 최종 장면 종료 시간은 다음 중 하나로 작성: " + ", ".join(str(value) for value in request.supported_video_durations) if request.supported_video_durations else ""}
 {"- USP가 비어있거나 null인 경우, 상품 데이터의 다른 정보만을 바탕으로 소비자의 구매를 유도할 수 있는 핵심 소구점(USP)을 도출해 최종 스크립트에 반영하세요." if not has_usp else ""}
 
@@ -138,7 +150,22 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 타깃: {request.target_audience}
 상품 데이터:
 {product_json}
+추가 리뷰 데이터:
+{reviews_json}
 """
+
+
+def build_script_message_content(
+    request: ScriptGenerationRequest,
+    prompt: str,
+) -> str | list[dict[str, Any]]:
+    """Build OpenRouter content, adding the product image when supplied."""
+    if not request.image_url:
+        return prompt
+    return [
+        {"type": "text", "text": prompt},
+        {"type": "image_url", "image_url": {"url": request.image_url}},
+    ]
 
 
 def extract_script_json(content: str) -> dict[str, Any]:
@@ -370,7 +397,10 @@ class OpenRouterClient:
             "reasoning": {"exclude": True},
             "messages": [{
                 "role": "user",
-                "content": build_script_prompt(request) + retry_instruction,
+                "content": build_script_message_content(
+                    request,
+                    build_script_prompt(request) + retry_instruction,
+                ),
             }],
         }
         http_request = Request(

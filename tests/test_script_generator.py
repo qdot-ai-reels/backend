@@ -9,6 +9,7 @@ from app.script_generator import (
     ScriptGenerationRequest,
     ScriptValidationError,
     build_script_prompt,
+    build_script_message_content,
     extract_script_json,
     validate_script_document,
 )
@@ -272,6 +273,35 @@ class ScriptGeneratorTests(unittest.TestCase):
         prompt = json.loads(captured["request"].data)["messages"][0]["content"]
         self.assertNotIn("social_posts", prompt)
         self.assertNotIn("사용자 게시물", prompt)
+
+    def test_includes_reviews_and_custom_prompt_in_script_prompt(self):
+        request = ScriptGenerationRequest(
+            product=PRODUCT,
+            reviews=["거품이 잘 납니다."],
+            custom_prompt="30초 이내 광고로 작성",
+        )
+
+        prompt = build_script_prompt(request)
+
+        self.assertIn("거품이 잘 납니다.", prompt)
+        self.assertIn("30초 이내 광고로 작성", prompt)
+
+    def test_adds_product_image_to_multimodal_message(self):
+        request = ScriptGenerationRequest(
+            product=PRODUCT,
+            image_url="https://example.com/product.jpg",
+        )
+
+        content = build_script_message_content(request, "상품 스크립트를 작성하세요.")
+
+        self.assertEqual(content[0], {"type": "text", "text": "상품 스크립트를 작성하세요."})
+        self.assertEqual(
+            content[1],
+            {
+                "type": "image_url",
+                "image_url": {"url": "https://example.com/product.jpg"},
+            },
+        )
 
     def test_rejects_openrouter_response_without_content(self):
         client = OpenRouterClient(
