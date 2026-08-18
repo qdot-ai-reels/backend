@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 from unittest.mock import Mock
 
+from fastapi import HTTPException
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -15,6 +16,7 @@ from app.api.v1.settings import (
     get_settings_repository,
     get_openrouter_catalog,
     get_google_tts_catalog,
+    get_openrouter_video_catalog,
 )
 from app.settings_service import (
     InMemorySettingsRepository,
@@ -22,9 +24,15 @@ from app.settings_service import (
     GoogleTTSCatalogClient,
     SettingsService,
     SettingsValidationError,
+    OpenRouterVideoCatalogClient,
+    VideoModelCapabilities,
 )
 from app.db import Base, SQLAlchemySettingsRepository, GlobalSettingsRow
-from app.runtime_config import build_script_client, build_tts_settings, build_video_client
+from app.runtime_config import (
+    build_script_client,
+    build_tts_settings,
+    build_video_client,
+)
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -101,6 +109,23 @@ class SettingsServiceTests(unittest.TestCase):
         self.assertEqual(service.get_runtime_settings().video_max_duration_seconds, 20)
         self.assertEqual(service.get_runtime_settings().max_retries, 3)
 
+    def test_video_capabilities_are_used_without_database_settings(self):
+        with patch.dict("os.environ", {"OPENROUTER_API_KEY": "env-key"}):
+            capabilities = VideoModelCapabilities(
+                model_id="video-model",
+                name="Video Model",
+                supported_durations=(5, 8),
+                supported_aspect_ratios=("9:16",),
+                supported_resolutions=("1080p",),
+                generate_audio=False,
+            )
+
+            client = build_video_client(capabilities=capabilities)
+
+        self.assertEqual(client.api_key, "env-key")
+        self.assertEqual(client.supported_durations, (5, 8))
+        self.assertEqual(client.supported_resolutions, ("1080p",))
+
 
 class ProviderCatalogTests(unittest.TestCase):
     def test_openrouter_catalog_maps_model_fields(self):
@@ -132,6 +157,27 @@ class ProviderCatalogTests(unittest.TestCase):
             [{"name": "ko-KR-Standard-A", "language_codes": ["ko-KR"], "ssml_gender": "FEMALE"}],
         )
 
+    def test_openrouter_video_catalog_maps_capabilities_and_endpoint(self):
+        opener = Mock()
+        response = Mock()
+        response.read.return_value = (
+            b'{"data":[{"id":"video-a","name":"Video A",'
+            b'"supported_durations":[5,8],"supported_aspect_ratios":["9:16"],'
+            b'"supported_resolutions":["720p"],"generate_audio":false}]}'
+        )
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        opener.return_value = response
+
+        result = OpenRouterVideoCatalogClient("test-key", opener=opener).list_models()
+
+        self.assertEqual(result[0].model_id, "video-a")
+        self.assertEqual(result[0].supported_durations, (5, 8))
+        self.assertEqual(result[0].supported_aspect_ratios, ("9:16",))
+        self.assertEqual(result[0].supported_resolutions, ("720p",))
+        request = opener.call_args.args[0]
+        self.assertEqual(request.full_url, "https://openrouter.ai/api/v1/videos/models")
+
 
 class SettingsApiTests(unittest.TestCase):
     def setUp(self):
@@ -150,6 +196,30 @@ class SettingsApiTests(unittest.TestCase):
 
         response = get_settings(self.service)
         self.assertEqual(response["openrouter_model"], "m1")
+
+    def test_update_rejects_unknown_video_model_when_catalog_is_available(self):
+        catalog = OpenRouterVideoCatalogClient()
+        catalog.list_models = Mock(
+            return_value=[
+                VideoModelCapabilities(
+                    model_id="video-a",
+                    name="Video A",
+                    supported_durations=(5, 8),
+                    supported_aspect_ratios=("9:16",),
+                    supported_resolutions=("720p",),
+                    generate_audio=False,
+                )
+            ]
+        )
+
+        with self.assertRaises(HTTPException) as context:
+            update_settings(
+                SettingsUpdateBody(openrouter_video_model="video-unknown"),
+                self.service,
+                catalog,
+            )
+
+        self.assertEqual(context.exception.status_code, 422)
 
     def test_catalog_endpoints(self):
         openrouter = Mock(list_models=Mock(return_value=[{"id": "m1", "name": "M1"}]))

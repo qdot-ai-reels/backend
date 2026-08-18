@@ -40,10 +40,10 @@ class FakeScriptClient:
 
 
 class ScriptApiTests(unittest.TestCase):
-    @patch("app.api.v1.script.OpenRouterClient.from_env")
-    def test_generates_script_from_http_body(self, from_env):
+    @patch("app.api.v1.script.build_script_client")
+    def test_generates_script_from_http_body(self, build_client):
         client = FakeScriptClient()
-        from_env.return_value = client
+        build_client.return_value = client
         body = ScriptGenerationBody(
             product={"brand_name": "프랭클린", "product_name": "아기 주방세제"}
         )

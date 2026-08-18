@@ -1,4 +1,5 @@
 from collections.abc import Generator
+import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -6,8 +7,8 @@ from pydantic import BaseModel, Field
 
 from app.settings_service import (
     GoogleTTSCatalogClient,
-    InMemorySettingsRepository,
     OpenRouterCatalogClient,
+    OpenRouterVideoCatalogClient,
     ProviderCatalogError,
     SettingsError,
     SettingsService,
@@ -16,7 +17,6 @@ from app.settings_service import (
 
 
 router = APIRouter()
-_repository = InMemorySettingsRepository()
 
 
 class SettingsUpdateBody(BaseModel):
@@ -27,6 +27,7 @@ class SettingsUpdateBody(BaseModel):
     video_resolution: str | None = None
     video_max_duration_seconds: int | None = Field(default=None, ge=1, le=30)
     max_retries: int | None = Field(default=None, ge=0, le=5)
+    mute_original_audio: bool | None = None
 
 
 def get_settings_repository() -> Generator[SettingsService, None, None]:
@@ -52,22 +53,34 @@ def get_optional_settings_repository() -> Generator[SettingsService | None, None
     yield from get_settings_repository()
 
 
-def get_openrouter_catalog() -> OpenRouterCatalogClient:
+def _get_openrouter_api_key_for_catalog() -> str:
     from app.core.config import settings
     from app.db import SQLAlchemySettingsRepository, SessionLocal
+
+    environment_api_key = os.getenv("OPENROUTER_API_KEY", "")
+    if not settings.SETTINGS_ENCRYPTION_KEY:
+        return environment_api_key
 
     session = SessionLocal()
     try:
         service = SettingsService(
             SQLAlchemySettingsRepository(session), settings.SETTINGS_ENCRYPTION_KEY
         )
-        return OpenRouterCatalogClient(service.get_openrouter_api_key() or "")
+        return service.get_openrouter_api_key() or environment_api_key
     finally:
         session.close()
 
 
+def get_openrouter_catalog() -> OpenRouterCatalogClient:
+    return OpenRouterCatalogClient(_get_openrouter_api_key_for_catalog())
+
+
 def get_google_tts_catalog() -> GoogleTTSCatalogClient:
     return GoogleTTSCatalogClient()
+
+
+def get_openrouter_video_catalog() -> OpenRouterVideoCatalogClient:
+    return OpenRouterVideoCatalogClient(_get_openrouter_api_key_for_catalog())
 
 
 @router.get("/settings")
@@ -82,9 +95,20 @@ def get_settings(service: SettingsService = Depends(get_settings_repository)) ->
 def update_settings(
     body: SettingsUpdateBody,
     service: SettingsService = Depends(get_settings_repository),
+    video_catalog: OpenRouterVideoCatalogClient = Depends(get_openrouter_video_catalog),
 ) -> dict[str, Any]:
     try:
-        return service.update(body.model_dump(exclude_none=True)).__dict__
+        values = body.model_dump(exclude_none=True)
+        selected_video_model = values.get("openrouter_video_model")
+        if selected_video_model and isinstance(video_catalog, OpenRouterVideoCatalogClient):
+            supported_models = {item.model_id for item in video_catalog.list_models()}
+            if selected_video_model not in supported_models:
+                raise SettingsValidationError(
+                    f"지원하지 않는 OpenRouter 영상 모델입니다: {selected_video_model}"
+                )
+        return service.update(values).__dict__
+    except ProviderCatalogError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
     except SettingsValidationError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except SettingsError as error:
@@ -95,6 +119,16 @@ def update_settings(
 def list_openrouter_models(catalog: OpenRouterCatalogClient = Depends(get_openrouter_catalog)) -> list[dict[str, Any]]:
     try:
         return catalog.list_models()
+    except ProviderCatalogError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@router.get("/settings/openrouter/video-models")
+def list_openrouter_video_models(
+    catalog: OpenRouterVideoCatalogClient = Depends(get_openrouter_video_catalog),
+) -> list[dict[str, Any]]:
+    try:
+        return [capability.__dict__ for capability in catalog.list_models()]
     except ProviderCatalogError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 

@@ -4,7 +4,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.script_generator import (
-    OpenRouterClient,
     OpenRouterConfigurationError,
     OpenRouterRequestError,
     ScriptGenerationRequest,
@@ -13,7 +12,6 @@ from app.script_generator import (
 from app.api.v1.settings import get_optional_settings_repository
 from app.runtime_config import build_script_client
 from app.settings_service import SettingsService
-from app.video_generator import OpenRouterVideoClient
 
 
 router = APIRouter()
@@ -40,13 +38,11 @@ def generate_script(
     max_duration_seconds = body.max_duration_seconds or (
         service.get_runtime_settings().video_max_duration_seconds if service else 30
     )
-    supported_durations = OpenRouterVideoClient.from_env().supported_durations
     request = ScriptGenerationRequest(
         product=body.product,
         max_duration_seconds=max_duration_seconds,
         channel=body.channel,
         target_audience=body.target_audience,
-        supported_video_durations=supported_durations,
     )
 
     try:

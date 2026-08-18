@@ -32,6 +32,7 @@ class GlobalSettings:
     video_resolution: str = "720p"
     video_max_duration_seconds: int = 30
     max_retries: int = 2
+    mute_original_audio: bool = True
 
 
 class SettingsRepository(Protocol):
@@ -63,6 +64,7 @@ class PublicSettings:
     video_resolution: str
     video_max_duration_seconds: int
     max_retries: int
+    mute_original_audio: bool
 
 
 class SettingsService:
@@ -91,6 +93,7 @@ class SettingsService:
             video_resolution=settings.video_resolution,
             video_max_duration_seconds=settings.video_max_duration_seconds,
             max_retries=settings.max_retries,
+            mute_original_audio=settings.mute_original_audio,
         )
 
     def get_openrouter_api_key(self) -> str | None:
@@ -129,6 +132,7 @@ class SettingsService:
             "video_resolution",
             "video_max_duration_seconds",
             "max_retries",
+            "mute_original_audio",
         }
         unknown = set(values) - allowed
         if unknown:
@@ -137,6 +141,8 @@ class SettingsService:
             raise SettingsValidationError("video_max_duration_seconds는 1~30초여야 합니다.")
         if "max_retries" in values and not 0 <= values["max_retries"] <= 5:
             raise SettingsValidationError("max_retries는 0~5회여야 합니다.")
+        if "mute_original_audio" in values and not isinstance(values["mute_original_audio"], bool):
+            raise SettingsValidationError("mute_original_audio는 boolean이어야 합니다.")
         for field in ("openrouter_api_key", "openrouter_model", "openrouter_video_model", "google_tts_voice_name", "video_resolution"):
             if field in values and not isinstance(values[field], str):
                 raise SettingsValidationError(f"{field}는 문자열이어야 합니다.")
@@ -161,6 +167,48 @@ class OpenRouterCatalogClient:
             raise ProviderCatalogError("OpenRouter 모델 목록을 조회하지 못했습니다.") from error
         return [
             {key: item[key] for key in ("id", "name", "context_length") if key in item}
+            for item in payload.get("data", [])
+            if isinstance(item, dict) and item.get("id")
+        ]
+
+
+@dataclass(frozen=True)
+class VideoModelCapabilities:
+    model_id: str
+    name: str | None
+    supported_durations: tuple[int, ...]
+    supported_aspect_ratios: tuple[str, ...]
+    supported_resolutions: tuple[str, ...]
+    generate_audio: bool
+
+
+class OpenRouterVideoCatalogClient:
+    """Client for OpenRouter's video model capability catalog."""
+
+    def __init__(self, api_key: str = "", opener: Callable[..., Any] = urlopen) -> None:
+        self.api_key = api_key
+        self.opener = opener
+
+    def list_models(self) -> list[VideoModelCapabilities]:
+        request = Request(
+            "https://openrouter.ai/api/v1/videos/models",
+            headers={"Authorization": f"Bearer {self.api_key}"} if self.api_key else {},
+        )
+        try:
+            with self.opener(request, timeout=20) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception as error:
+            raise ProviderCatalogError("OpenRouter 영상 모델 목록을 조회하지 못했습니다.") from error
+
+        return [
+            VideoModelCapabilities(
+                model_id=item["id"],
+                name=item.get("name"),
+                supported_durations=tuple(item.get("supported_durations") or ()),
+                supported_aspect_ratios=tuple(item.get("supported_aspect_ratios") or ()),
+                supported_resolutions=tuple(item.get("supported_resolutions") or ()),
+                generate_audio=bool(item.get("generate_audio", False)),
+            )
             for item in payload.get("data", [])
             if isinstance(item, dict) and item.get("id")
         ]

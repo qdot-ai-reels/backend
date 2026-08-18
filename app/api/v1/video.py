@@ -14,8 +14,8 @@ from app.video_validation_pipeline import (
     VideoValidationPipelineError,
 )
 from app.api.v1.settings import get_optional_settings_repository
-from app.runtime_config import build_video_client
-from app.settings_service import SettingsService
+from app.runtime_config import build_video_client, get_video_model_capabilities
+from app.settings_service import ProviderCatalogError, SettingsService
 
 
 router = APIRouter()
@@ -52,7 +52,8 @@ def generate_video(
     )
 
     try:
-        client = build_video_client(service)
+        capabilities = get_video_model_capabilities(service)
+        client = build_video_client(service, capabilities)
         max_retries = service.get_runtime_settings().max_retries if service else 1
         result = VideoValidationPipeline(
             generate_video=lambda pipeline_request, _attempt: client.generate_video(
@@ -60,6 +61,8 @@ def generate_video(
             ),
             max_retries=max_retries,
         ).run(request)
+    except ProviderCatalogError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
     except OpenRouterRequestError as error:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

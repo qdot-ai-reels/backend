@@ -25,6 +25,7 @@ class GlobalSettingsRow(Base):
     video_resolution: Mapped[str] = mapped_column(String(32), default="720p")
     video_max_duration_seconds: Mapped[int] = mapped_column(Integer, default=30)
     max_retries: Mapped[int] = mapped_column(Integer, default=2)
+    mute_original_audio: Mapped[bool] = mapped_column(default=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -74,6 +75,7 @@ class SQLAlchemySettingsRepository(SettingsRepository):
             "video_resolution",
             "video_max_duration_seconds",
             "max_retries",
+            "mute_original_audio",
         ):
             setattr(row, field, getattr(settings, field))
         self.session.commit()
@@ -89,4 +91,5 @@ class SQLAlchemySettingsRepository(SettingsRepository):
             video_resolution=row.video_resolution,
             video_max_duration_seconds=row.video_max_duration_seconds,
             max_retries=row.max_retries,
+            mute_original_audio=row.mute_original_audio,
         )
