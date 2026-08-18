@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -7,10 +9,19 @@ from app.api.v1.script import router as script_router
 from app.api.v1.video import router as video_router
 from app.api.v1.tts import router as tts_router
 from app.api.v1.settings import router as settings_router
+from app.db import init_db
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Create known tables once when the application starts."""
+    init_db()
+    yield
 
 app = FastAPI(
     title="Shorts Reels Generator API",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # CORS 설정

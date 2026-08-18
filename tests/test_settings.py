@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 from unittest.mock import Mock
 
 from app.api.v1.settings import (
@@ -20,6 +21,8 @@ from app.settings_service import (
 from app.db import Base, SQLAlchemySettingsRepository, GlobalSettingsRow
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+
+from app.main import lifespan
 
 
 class SettingsServiceTests(unittest.TestCase):
@@ -120,3 +123,12 @@ class SettingsApiTests(unittest.TestCase):
         google = Mock(list_voices=Mock(return_value=[{"name": "v1"}]))
         self.assertEqual(list_openrouter_models(openrouter), [{"id": "m1", "name": "M1"}])
         self.assertEqual(list_google_tts_voices(google), [{"name": "v1"}])
+
+
+class DatabaseLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_initializes_database_once_during_application_startup(self):
+        with patch("app.main.init_db") as init_db:
+            async with lifespan(object()):
+                pass
+
+        init_db.assert_called_once_with()

@@ -32,9 +32,8 @@ class SettingsUpdateBody(BaseModel):
 
 def get_settings_repository() -> Generator[SettingsService, None, None]:
     from app.core.config import settings
-    from app.db import SQLAlchemySettingsRepository, SessionLocal, init_db
+    from app.db import SQLAlchemySettingsRepository, SessionLocal
 
-    init_db()
     session = SessionLocal()
     try:
         yield SettingsService(
@@ -46,9 +45,8 @@ def get_settings_repository() -> Generator[SettingsService, None, None]:
 
 def get_openrouter_catalog() -> OpenRouterCatalogClient:
     from app.core.config import settings
-    from app.db import SQLAlchemySettingsRepository, SessionLocal, init_db
+    from app.db import SQLAlchemySettingsRepository, SessionLocal
 
-    init_db()
     session = SessionLocal()
     try:
         service = SettingsService(
