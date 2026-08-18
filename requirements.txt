@@ -8,3 +8,4 @@ python-dotenv
 boto3
 botocore
 google-cloud-texttospeech
+cryptography
