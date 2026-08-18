@@ -23,7 +23,7 @@ def build_script_client(service: SettingsService | None = None) -> OpenRouterCli
         model=persisted.openrouter_model or environment_client.model,
         fallback_model=environment_client.fallback_model,
         api_url=environment_client.api_url,
-        max_attempts=max(1, persisted.max_retries + 1),
+        max_attempts=max(1, persisted.script_generation_retries + 1),
     )
 
 
@@ -61,7 +61,7 @@ def build_video_client(
         api_key = service.get_openrouter_api_key() or api_key
         model = persisted.openrouter_video_model or model
         if capabilities is None:
-            supported_resolutions = (persisted.video_resolution,)
+            supported_resolutions = (persisted.video_max_resolution,)
 
     return OpenRouterVideoClient(
         api_key=api_key,

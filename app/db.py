@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Integer, String, create_engine, select
+from sqlalchemy import DateTime, Integer, String, create_engine, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.settings_service import GlobalSettings, SettingsRepository
@@ -22,9 +22,12 @@ class GlobalSettingsRow(Base):
     openrouter_model: Mapped[str | None] = mapped_column(String(255))
     openrouter_video_model: Mapped[str | None] = mapped_column(String(255))
     google_tts_voice_name: Mapped[str] = mapped_column(String(255), default="ko-KR-Standard-A")
-    video_resolution: Mapped[str] = mapped_column(String(32), default="720p")
-    video_max_duration_seconds: Mapped[int] = mapped_column(Integer, default=30)
-    max_retries: Mapped[int] = mapped_column(Integer, default=2)
+    video_min_resolution: Mapped[str] = mapped_column(String(32), default="720p")
+    video_max_resolution: Mapped[str] = mapped_column(String(32), default="1080p")
+    video_max_duration_seconds: Mapped[int] = mapped_column(Integer, default=15)
+    script_generation_retries: Mapped[int] = mapped_column(Integer, default=2)
+    video_generation_retries: Mapped[int] = mapped_column(Integer, default=1)
+    media_combine_retries: Mapped[int] = mapped_column(Integer, default=3)
     mute_original_audio: Mapped[bool] = mapped_column(default=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -47,6 +50,42 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("global_settings")}
+    missing_columns = {
+        "video_min_resolution": ("VARCHAR(32)", "'720p'"),
+        "video_max_resolution": ("VARCHAR(32)", "'1080p'"),
+        "script_generation_retries": ("INTEGER", "2"),
+        "video_generation_retries": ("INTEGER", "1"),
+        "media_combine_retries": ("INTEGER", "3"),
+    }
+
+    with engine.begin() as connection:
+        for name, (column_type, default) in missing_columns.items():
+            if name not in columns:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE global_settings ADD COLUMN {name} "
+                        f"{column_type} NOT NULL DEFAULT {default}"
+                    )
+                )
+
+        if "video_resolution" in columns and "video_max_resolution" not in columns:
+            connection.execute(
+                text(
+                    "UPDATE global_settings "
+                    "SET video_max_resolution = video_resolution "
+                    "WHERE video_resolution IS NOT NULL"
+                )
+            )
+        if "max_retries" in columns and "script_generation_retries" not in columns:
+            connection.execute(
+                text(
+                    "UPDATE global_settings "
+                    "SET script_generation_retries = max_retries "
+                    "WHERE max_retries IS NOT NULL"
+                )
+            )
 
 
 class SQLAlchemySettingsRepository(SettingsRepository):
@@ -72,9 +111,12 @@ class SQLAlchemySettingsRepository(SettingsRepository):
             "openrouter_model",
             "openrouter_video_model",
             "google_tts_voice_name",
-            "video_resolution",
+            "video_min_resolution",
+            "video_max_resolution",
             "video_max_duration_seconds",
-            "max_retries",
+            "script_generation_retries",
+            "video_generation_retries",
+            "media_combine_retries",
             "mute_original_audio",
         ):
             setattr(row, field, getattr(settings, field))
@@ -88,8 +130,11 @@ class SQLAlchemySettingsRepository(SettingsRepository):
             openrouter_model=row.openrouter_model,
             openrouter_video_model=row.openrouter_video_model,
             google_tts_voice_name=row.google_tts_voice_name,
-            video_resolution=row.video_resolution,
+            video_min_resolution=row.video_min_resolution,
+            video_max_resolution=row.video_max_resolution,
             video_max_duration_seconds=row.video_max_duration_seconds,
-            max_retries=row.max_retries,
+            script_generation_retries=row.script_generation_retries,
+            video_generation_retries=row.video_generation_retries,
+            media_combine_retries=row.media_combine_retries,
             mute_original_audio=row.mute_original_audio,
         )

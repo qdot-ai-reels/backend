@@ -29,9 +29,12 @@ class GlobalSettings:
     openrouter_model: str | None = None
     openrouter_video_model: str | None = None
     google_tts_voice_name: str = "ko-KR-Standard-A"
-    video_resolution: str = "720p"
-    video_max_duration_seconds: int = 30
-    max_retries: int = 2
+    video_min_resolution: str = "720p"
+    video_max_resolution: str = "1080p"
+    video_max_duration_seconds: int = 15
+    script_generation_retries: int = 2
+    video_generation_retries: int = 1
+    media_combine_retries: int = 3
     mute_original_audio: bool = True
 
 
@@ -61,9 +64,12 @@ class PublicSettings:
     openrouter_model: str | None
     openrouter_video_model: str | None
     google_tts_voice_name: str
-    video_resolution: str
+    video_min_resolution: str
+    video_max_resolution: str
     video_max_duration_seconds: int
-    max_retries: int
+    script_generation_retries: int
+    video_generation_retries: int
+    media_combine_retries: int
     mute_original_audio: bool
 
 
@@ -90,9 +96,12 @@ class SettingsService:
             openrouter_model=settings.openrouter_model,
             openrouter_video_model=settings.openrouter_video_model,
             google_tts_voice_name=settings.google_tts_voice_name,
-            video_resolution=settings.video_resolution,
+            video_min_resolution=settings.video_min_resolution,
+            video_max_resolution=settings.video_max_resolution,
             video_max_duration_seconds=settings.video_max_duration_seconds,
-            max_retries=settings.max_retries,
+            script_generation_retries=settings.script_generation_retries,
+            video_generation_retries=settings.video_generation_retries,
+            media_combine_retries=settings.media_combine_retries,
             mute_original_audio=settings.mute_original_audio,
         )
 
@@ -112,6 +121,10 @@ class SettingsService:
     def update(self, values: dict[str, Any]) -> PublicSettings:
         self._validate(values)
         current = self.repository.get()
+        self._validate_resolution_range(
+            values.get("video_min_resolution", current.video_min_resolution),
+            values.get("video_max_resolution", current.video_max_resolution),
+        )
         updates = dict(values)
         api_key = updates.pop("openrouter_api_key", None)
         if api_key is not None:
@@ -129,9 +142,12 @@ class SettingsService:
             "openrouter_model",
             "openrouter_video_model",
             "google_tts_voice_name",
-            "video_resolution",
+            "video_min_resolution",
+            "video_max_resolution",
             "video_max_duration_seconds",
-            "max_retries",
+            "script_generation_retries",
+            "video_generation_retries",
+            "media_combine_retries",
             "mute_original_audio",
         }
         unknown = set(values) - allowed
@@ -139,13 +155,45 @@ class SettingsService:
             raise SettingsValidationError(f"지원하지 않는 설정입니다: {sorted(unknown)}")
         if "video_max_duration_seconds" in values and not 1 <= values["video_max_duration_seconds"] <= 30:
             raise SettingsValidationError("video_max_duration_seconds는 1~30초여야 합니다.")
-        if "max_retries" in values and not 0 <= values["max_retries"] <= 5:
-            raise SettingsValidationError("max_retries는 0~5회여야 합니다.")
+        for field in (
+            "script_generation_retries",
+            "video_generation_retries",
+            "media_combine_retries",
+        ):
+            if field in values and not 0 <= values[field] <= 5:
+                raise SettingsValidationError(f"{field}는 0~5회여야 합니다.")
         if "mute_original_audio" in values and not isinstance(values["mute_original_audio"], bool):
             raise SettingsValidationError("mute_original_audio는 boolean이어야 합니다.")
-        for field in ("openrouter_api_key", "openrouter_model", "openrouter_video_model", "google_tts_voice_name", "video_resolution"):
+        for field in (
+            "openrouter_api_key",
+            "openrouter_model",
+            "openrouter_video_model",
+            "google_tts_voice_name",
+            "video_min_resolution",
+            "video_max_resolution",
+        ):
             if field in values and not isinstance(values[field], str):
                 raise SettingsValidationError(f"{field}는 문자열이어야 합니다.")
+
+        if "video_min_resolution" in values or "video_max_resolution" in values:
+            min_resolution = values.get("video_min_resolution")
+            max_resolution = values.get("video_max_resolution")
+            if min_resolution is not None and max_resolution is not None:
+                SettingsService._validate_resolution_range(min_resolution, max_resolution)
+
+    @staticmethod
+    def _validate_resolution_range(min_resolution: str, max_resolution: str) -> None:
+        def parse(value: str, field: str) -> int:
+            if not value.endswith("p") or not value[:-1].isdigit() or int(value[:-1]) <= 0:
+                raise SettingsValidationError(f"{field}는 720p와 같은 형식이어야 합니다.")
+            return int(value[:-1])
+
+        min_value = parse(min_resolution, "video_min_resolution")
+        max_value = parse(max_resolution, "video_max_resolution")
+        if min_value > max_value:
+            raise SettingsValidationError(
+                "video_min_resolution은 video_max_resolution보다 클 수 없습니다."
+            )
 
 
 class OpenRouterCatalogClient:

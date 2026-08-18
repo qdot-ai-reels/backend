@@ -27,13 +27,13 @@ from app.settings_service import (
     OpenRouterVideoCatalogClient,
     VideoModelCapabilities,
 )
-from app.db import Base, SQLAlchemySettingsRepository, GlobalSettingsRow
+from app.db import Base, SQLAlchemySettingsRepository, GlobalSettingsRow, init_db
 from app.runtime_config import (
     build_script_client,
     build_tts_settings,
     build_video_client,
 )
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from app.main import lifespan
@@ -69,6 +69,28 @@ class SettingsServiceTests(unittest.TestCase):
         with self.assertRaises(SettingsValidationError):
             service.update({"video_max_duration_seconds": 31})
 
+    def test_rejects_invalid_resolution_range(self):
+        service = SettingsService(
+            InMemorySettingsRepository(), encryption_key=SettingsService.test_key()
+        )
+
+        with self.assertRaises(SettingsValidationError):
+            service.update({"video_min_resolution": "1080p", "video_max_resolution": "720p"})
+        with self.assertRaises(SettingsValidationError):
+            service.update({"video_min_resolution": "full-hd"})
+
+    def test_uses_prd_defaults(self):
+        public = SettingsService(
+            InMemorySettingsRepository(), encryption_key=SettingsService.test_key()
+        ).get_public()
+
+        self.assertEqual(public.video_min_resolution, "720p")
+        self.assertEqual(public.video_max_resolution, "1080p")
+        self.assertEqual(public.video_max_duration_seconds, 15)
+        self.assertEqual(public.script_generation_retries, 2)
+        self.assertEqual(public.video_generation_retries, 1)
+        self.assertEqual(public.media_combine_retries, 3)
+
     def test_sqlalchemy_repository_persists_one_global_record(self):
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(engine)
@@ -93,7 +115,9 @@ class SettingsServiceTests(unittest.TestCase):
                 "openrouter_video_model": "db-video-model",
                 "google_tts_voice_name": "ko-KR-Wavenet-A",
                 "video_max_duration_seconds": 20,
-                "max_retries": 3,
+                "script_generation_retries": 2,
+                "video_generation_retries": 1,
+                "media_combine_retries": 3,
             }
         )
 
@@ -107,7 +131,9 @@ class SettingsServiceTests(unittest.TestCase):
         self.assertEqual(video_client.model, "db-video-model")
         self.assertEqual(tts_settings.voice_name, "ko-KR-Wavenet-A")
         self.assertEqual(service.get_runtime_settings().video_max_duration_seconds, 20)
-        self.assertEqual(service.get_runtime_settings().max_retries, 3)
+        self.assertEqual(service.get_runtime_settings().script_generation_retries, 2)
+        self.assertEqual(service.get_runtime_settings().video_generation_retries, 1)
+        self.assertEqual(service.get_runtime_settings().media_combine_retries, 3)
 
     def test_video_capabilities_are_used_without_database_settings(self):
         with patch.dict("os.environ", {"OPENROUTER_API_KEY": "env-key"}):
@@ -221,6 +247,36 @@ class SettingsApiTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 422)
 
+    def test_adjusts_video_settings_to_selected_model_capabilities(self):
+        catalog = OpenRouterVideoCatalogClient()
+        catalog.list_models = Mock(
+            return_value=[
+                VideoModelCapabilities(
+                    model_id="video-a",
+                    name="Video A",
+                    supported_durations=(4, 6, 8),
+                    supported_aspect_ratios=("9:16",),
+                    supported_resolutions=("720p",),
+                    generate_audio=False,
+                )
+            ]
+        )
+
+        result = update_settings(
+            SettingsUpdateBody(
+                openrouter_video_model="video-a",
+                video_min_resolution="720p",
+                video_max_resolution="1080p",
+                video_max_duration_seconds=15,
+            ),
+            self.service,
+            catalog,
+        )
+
+        self.assertEqual(result["video_min_resolution"], "720p")
+        self.assertEqual(result["video_max_resolution"], "1080p")
+        self.assertEqual(result["video_max_duration_seconds"], 8)
+
     def test_catalog_endpoints(self):
         openrouter = Mock(list_models=Mock(return_value=[{"id": "m1", "name": "M1"}]))
         google = Mock(list_voices=Mock(return_value=[{"name": "v1"}]))
@@ -235,6 +291,58 @@ class DatabaseLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 pass
 
         init_db.assert_called_once_with()
+
+    def test_migrates_legacy_settings_columns(self):
+        engine = create_engine("sqlite:///:memory:")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE global_settings (
+                        id INTEGER PRIMARY KEY,
+                        openrouter_api_key_encrypted VARCHAR(1024),
+                        openrouter_model VARCHAR(255),
+                        openrouter_video_model VARCHAR(255),
+                        google_tts_voice_name VARCHAR(255) NOT NULL DEFAULT 'ko-KR-Standard-A',
+                        video_resolution VARCHAR(32) NOT NULL DEFAULT '720p',
+                        video_max_duration_seconds INTEGER NOT NULL DEFAULT 30,
+                        max_retries INTEGER NOT NULL DEFAULT 2,
+                        mute_original_audio BOOLEAN NOT NULL DEFAULT 1,
+                        updated_at DATETIME
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO global_settings "
+                    "(id, video_resolution, video_max_duration_seconds, max_retries) "
+                    "VALUES (1, '720p', 15, 4)"
+                )
+            )
+
+        with patch("app.db.engine", engine):
+            init_db()
+
+        columns = {column["name"] for column in inspect(engine).get_columns("global_settings")}
+        self.assertTrue(
+            {
+                "video_min_resolution",
+                "video_max_resolution",
+                "script_generation_retries",
+                "video_generation_retries",
+                "media_combine_retries",
+            }.issubset(columns)
+        )
+        with engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT video_min_resolution, video_max_resolution, "
+                    "script_generation_retries, video_generation_retries, media_combine_retries "
+                    "FROM global_settings WHERE id = 1"
+                )
+            ).one()
+        self.assertEqual(tuple(row), ("720p", "720p", 4, 1, 3))
 
 
 class SettingsHttpTests(unittest.TestCase):
