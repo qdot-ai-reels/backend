@@ -12,7 +12,7 @@ class FakeTTSClient:
 
 
 class TTSApiTests(unittest.TestCase):
-    @patch("app.api.v1.tts.GoogleTTSClient", return_value=FakeTTSClient())
+    @patch("app.api.v1.tts.OpenRouterTTSClient", return_value=FakeTTSClient())
     def test_returns_one_mp3_response_for_complete_script(self, _client):
         response = generate_narration(
             TTSGenerationBody(
@@ -30,7 +30,7 @@ class TTSApiTests(unittest.TestCase):
         self.assertIn("narration.mp3", response.headers["content-disposition"])
 
     @patch(
-        "app.api.v1.tts.GoogleTTSClient",
+        "app.api.v1.tts.OpenRouterTTSClient",
         return_value=type(
             "FailingTTSClient",
             (),

@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.settings_service import (
-    GoogleTTSCatalogClient,
     OpenRouterCatalogClient,
+    OpenRouterTTSCatalogClient,
     OpenRouterVideoCatalogClient,
     ProviderCatalogError,
     SettingsError,
@@ -20,10 +20,13 @@ router = APIRouter()
 
 
 class SettingsUpdateBody(BaseModel):
-    openrouter_api_key: str | None = Field(default=None, min_length=1)
-    openrouter_model: str | None = None
+    openrouter_script_api_key: str | None = Field(default=None, min_length=1)
+    openrouter_tts_api_key: str | None = Field(default=None, min_length=1)
+    openrouter_video_api_key: str | None = Field(default=None, min_length=1)
+    openrouter_script_model: str | None = None
+    openrouter_tts_model: str | None = None
     openrouter_video_model: str | None = None
-    google_tts_voice_name: str | None = None
+    openrouter_tts_voice: str | None = None
     video_min_resolution: str | None = None
     video_max_resolution: str | None = None
     video_max_duration_seconds: int | None = Field(default=None, ge=1, le=30)
@@ -56,11 +59,11 @@ def get_optional_settings_repository() -> Generator[SettingsService | None, None
     yield from get_settings_repository()
 
 
-def _get_openrouter_api_key_for_catalog() -> str:
+def _get_openrouter_script_api_key_for_catalog() -> str:
     from app.core.config import settings
     from app.db import SQLAlchemySettingsRepository, SessionLocal
 
-    environment_api_key = os.getenv("OPENROUTER_API_KEY", "")
+    environment_api_key = os.getenv("OPENROUTER_SCRIPT_API_KEY", "")
     if not settings.SETTINGS_ENCRYPTION_KEY:
         return environment_api_key
 
@@ -69,21 +72,49 @@ def _get_openrouter_api_key_for_catalog() -> str:
         service = SettingsService(
             SQLAlchemySettingsRepository(session), settings.SETTINGS_ENCRYPTION_KEY
         )
-        return service.get_openrouter_api_key() or environment_api_key
+        return service.get_script_api_key() or environment_api_key
     finally:
         session.close()
 
 
 def get_openrouter_catalog() -> OpenRouterCatalogClient:
-    return OpenRouterCatalogClient(_get_openrouter_api_key_for_catalog())
+    return OpenRouterCatalogClient(_get_openrouter_script_api_key_for_catalog())
 
 
-def get_google_tts_catalog() -> GoogleTTSCatalogClient:
-    return GoogleTTSCatalogClient()
+def get_openrouter_tts_catalog() -> OpenRouterTTSCatalogClient:
+    from app.core.config import settings
+    from app.db import SQLAlchemySettingsRepository, SessionLocal
+
+    environment_api_key = os.getenv("OPENROUTER_TTS_API_KEY", "")
+    if not settings.SETTINGS_ENCRYPTION_KEY:
+        return OpenRouterTTSCatalogClient(environment_api_key)
+
+    session = SessionLocal()
+    try:
+        service = SettingsService(
+            SQLAlchemySettingsRepository(session), settings.SETTINGS_ENCRYPTION_KEY
+        )
+        return OpenRouterTTSCatalogClient(service.get_tts_api_key() or environment_api_key)
+    finally:
+        session.close()
 
 
 def get_openrouter_video_catalog() -> OpenRouterVideoCatalogClient:
-    return OpenRouterVideoCatalogClient(_get_openrouter_api_key_for_catalog())
+    from app.core.config import settings
+
+    api_key = os.getenv("OPENROUTER_VIDEO_API_KEY", "")
+    if settings.SETTINGS_ENCRYPTION_KEY:
+        from app.db import SQLAlchemySettingsRepository, SessionLocal
+
+        session = SessionLocal()
+        try:
+            service = SettingsService(
+                SQLAlchemySettingsRepository(session), settings.SETTINGS_ENCRYPTION_KEY
+            )
+            api_key = service.get_video_api_key() or api_key
+        finally:
+            session.close()
+    return OpenRouterVideoCatalogClient(api_key)
 
 
 @router.get("/settings")
@@ -173,9 +204,21 @@ def list_openrouter_video_models(
         raise HTTPException(status_code=502, detail=str(error)) from error
 
 
-@router.get("/settings/google-tts/voices")
-def list_google_tts_voices(catalog: GoogleTTSCatalogClient = Depends(get_google_tts_catalog)) -> list[dict[str, Any]]:
+@router.get("/settings/openrouter-tts/voices")
+def list_openrouter_tts_voices(
+    catalog: OpenRouterTTSCatalogClient = Depends(get_openrouter_tts_catalog),
+) -> list[dict[str, Any]]:
     try:
         return catalog.list_voices()
+    except ProviderCatalogError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@router.get("/settings/openrouter-tts/models")
+def list_openrouter_tts_models(
+    catalog: OpenRouterTTSCatalogClient = Depends(get_openrouter_tts_catalog),
+) -> list[dict[str, Any]]:
+    try:
+        return catalog.list_models()
     except ProviderCatalogError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error

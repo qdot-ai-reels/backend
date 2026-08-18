@@ -145,8 +145,8 @@ class ScriptGeneratorTests(unittest.TestCase):
         with self.assertRaises(OpenRouterConfigurationError):
             client.generate_script(ScriptGenerationRequest(product=PRODUCT))
 
-    def test_uses_free_default_model_when_model_environment_variable_is_blank(self):
-        with patch.dict(os.environ, {"OPENROUTER_MODEL": ""}, clear=False):
+    def test_uses_free_default_model_when_script_model_environment_variable_is_blank(self):
+        with patch.dict(os.environ, {"OPENROUTER_SCRIPT_MODEL": ""}, clear=False):
             client = OpenRouterClient.from_env()
 
         self.assertEqual(client.model, "openai/gpt-oss-20b:free")

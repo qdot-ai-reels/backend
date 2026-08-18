@@ -1,10 +1,14 @@
+import json
 import unittest
+from unittest.mock import patch
 
 from app.tts_generator import (
-    GoogleTTSClient,
+    OpenRouterTTSClient,
     NarrationValidationError,
     SceneAudioDurationError,
     SceneNarration,
+    OpenRouterTTSClient,
+    OpenRouterTTSSettings,
     build_scene_narrations,
 )
 
@@ -19,6 +23,58 @@ SCRIPT = {
 
 
 class TTSGeneratorTests(unittest.TestCase):
+    @patch("app.tts_generator.urlopen")
+    def test_omits_voice_when_not_configured(self, urlopen):
+        response = type(
+            "Response",
+            (),
+            {
+                "__enter__": lambda self: self,
+                "__exit__": lambda self, *_args: None,
+                "read": lambda self: b"mp3-bytes",
+            },
+        )()
+        urlopen.return_value = response
+
+        client = OpenRouterTTSClient(
+            settings=OpenRouterTTSSettings(
+                api_key="test-key",
+                model="fish-audio/s2.1-pro-free:free",
+                voice_name="",
+            )
+        )
+
+        self.assertEqual(client.synthesizer("안녕하세요."), b"mp3-bytes")
+        request = urlopen.call_args.args[0]
+        payload = json.loads(request.data)
+        self.assertNotIn("voice", payload)
+        self.assertEqual(payload["model"], "fish-audio/s2.1-pro-free:free")
+
+    @patch("app.tts_generator.urlopen")
+    def test_includes_configured_voice(self, urlopen):
+        response = type(
+            "Response",
+            (),
+            {
+                "__enter__": lambda self: self,
+                "__exit__": lambda self, *_args: None,
+                "read": lambda self: b"mp3-bytes",
+            },
+        )()
+        urlopen.return_value = response
+
+        client = OpenRouterTTSClient(
+            settings=OpenRouterTTSSettings(
+                api_key="test-key",
+                model="test-model",
+                voice_name="test-voice",
+            )
+        )
+
+        client.synthesizer("테스트")
+        payload = json.loads(urlopen.call_args.args[0].data)
+        self.assertEqual(payload["voice"], "test-voice")
+
     def test_builds_scene_narrations_with_time_ranges(self):
         self.assertEqual(
             build_scene_narrations(SCRIPT),
@@ -66,7 +122,7 @@ class TTSGeneratorTests(unittest.TestCase):
             combine_calls.append(scene_audio)
             return b"combined-mp3-bytes"
 
-        client = GoogleTTSClient(
+        client = OpenRouterTTSClient(
             synthesizer=fake_synthesizer,
             combiner=fake_combiner,
             duration_reader=lambda _audio: 1.5,
@@ -96,7 +152,7 @@ class TTSGeneratorTests(unittest.TestCase):
             ]
         }
 
-        client = GoogleTTSClient(
+        client = OpenRouterTTSClient(
             synthesizer=lambda text: synth_calls.append(text) or b"audio",
             combiner=lambda scenes: combine_calls.append(scenes) or b"combined",
             duration_reader=lambda _audio: 1.0,
@@ -117,7 +173,7 @@ class TTSGeneratorTests(unittest.TestCase):
             ]
         }
 
-        client = GoogleTTSClient(
+        client = OpenRouterTTSClient(
             synthesizer=lambda text: synth_calls.append(text) or b"audio",
             combiner=lambda _scenes: b"combined",
             duration_reader=lambda _audio: 1.0,
@@ -127,7 +183,7 @@ class TTSGeneratorTests(unittest.TestCase):
         self.assertEqual(synth_calls, ["두 번째 장면입니다.", "마지막 장면입니다."])
 
     def test_rejects_scene_audio_longer_than_its_time_range(self):
-        client = GoogleTTSClient(
+        client = OpenRouterTTSClient(
             synthesizer=lambda _text: b"audio",
             combiner=lambda _scenes: b"should-not-be-called",
             duration_reader=lambda _audio: 3.2,
@@ -142,7 +198,7 @@ class TTSGeneratorTests(unittest.TestCase):
 
     def test_does_not_duplicate_script_dialogue_validation_in_tts(self):
         calls = []
-        client = GoogleTTSClient(
+        client = OpenRouterTTSClient(
             synthesizer=lambda text: calls.append(text) or b"audio",
             combiner=lambda _scenes: b"combined",
             duration_reader=lambda _audio: 0.5,

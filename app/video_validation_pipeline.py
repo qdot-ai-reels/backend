@@ -111,7 +111,7 @@ class VideoValidationPipeline:
 
     @staticmethod
     def _download_video(url: str, destination: str) -> None:
-        api_key = os.getenv("OPENROUTER_API_KEY", "")
+        api_key = os.getenv("OPENROUTER_VIDEO_API_KEY", "")
         request = Request(
             url,
             headers={"Authorization": f"Bearer {api_key}"} if api_key else {},

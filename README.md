@@ -63,8 +63,13 @@ docker compose up -d --build
 필요한 환경변수:
 
 ```bash
-OPENROUTER_API_KEY=발급받은_키
-OPENROUTER_MODEL=openai/gpt-oss-20b:free
+OPENROUTER_SCRIPT_API_KEY=스크립트_생성용_키
+OPENROUTER_TTS_API_KEY=TTS_생성용_키
+OPENROUTER_VIDEO_API_KEY=영상_생성용_키
+OPENROUTER_SCRIPT_MODEL=openai/gpt-oss-20b:free
+OPENROUTER_TTS_MODEL=fish-audio/s2.1-pro-free:free
+OPENROUTER_TTS_VOICE=
+OPENROUTER_VIDEO_MODEL=google/veo-3.1-lite
 ```
 
 사용 예시:
