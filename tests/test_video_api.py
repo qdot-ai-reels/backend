@@ -2,13 +2,23 @@ import unittest
 from unittest.mock import patch
 
 from app.api.v1.video import VideoGenerationBody, generate_video
+from app.settings_service import VideoModelCapabilities
 from app.video_validation_pipeline import PipelineResult, PipelineStatus
 
 
 class VideoApiTests(unittest.TestCase):
     @patch("app.api.v1.video.VideoValidationPipeline")
-    @patch("app.api.v1.video.OpenRouterVideoClient.from_env")
-    def test_generates_video_from_script_and_image(self, from_env, pipeline_class):
+    @patch("app.api.v1.video.get_video_model_capabilities")
+    @patch("app.api.v1.video.build_video_client")
+    def test_generates_video_from_script_and_image(self, build_client, get_capabilities, pipeline_class):
+        get_capabilities.return_value = VideoModelCapabilities(
+            model_id="video-model",
+            name="Video Model",
+            supported_durations=(4, 6, 8),
+            supported_aspect_ratios=("9:16",),
+            supported_resolutions=("720p",),
+            generate_audio=False,
+        )
         pipeline_class.return_value.run.return_value = PipelineResult(
             status=PipelineStatus.COMPLETED,
             attempts=1,

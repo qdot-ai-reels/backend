@@ -82,6 +82,8 @@ class OpenRouterVideoClient:
         poll_interval_seconds: float = 5.0,
         max_poll_attempts: int = 24,
         supported_durations: tuple[int, ...] = DEFAULT_SUPPORTED_DURATIONS,
+        supported_aspect_ratios: tuple[str, ...] = ("9:16",),
+        supported_resolutions: tuple[str, ...] = ("720p",),
         opener: Callable[..., Any] = urlopen,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -94,6 +96,8 @@ class OpenRouterVideoClient:
         self.poll_interval_seconds = poll_interval_seconds
         self.max_poll_attempts = max_poll_attempts
         self.supported_durations = supported_durations
+        self.supported_aspect_ratios = supported_aspect_ratios
+        self.supported_resolutions = supported_resolutions
         self.opener = opener
         self.sleeper = sleeper
 
@@ -112,8 +116,16 @@ class OpenRouterVideoClient:
     def generate_video(self, request: VideoGenerationRequest) -> VideoGenerationResult:
         if not self.api_key:
             raise OpenRouterConfigurationError("OPENROUTER_API_KEY가 설정되지 않았습니다.")
-        if request.aspect_ratio != "9:16":
-            raise VideoGenerationError("영상 생성 요청의 aspect_ratio는 9:16이어야 합니다.")
+        if request.aspect_ratio not in self.supported_aspect_ratios:
+            raise VideoGenerationError(
+                f"선택한 모델은 {request.aspect_ratio} 비율을 지원하지 않습니다. "
+                f"지원 비율: {', '.join(self.supported_aspect_ratios)}"
+            )
+        if request.resolution not in self.supported_resolutions:
+            raise VideoGenerationError(
+                f"선택한 모델은 {request.resolution} 해상도를 지원하지 않습니다. "
+                f"지원 해상도: {', '.join(self.supported_resolutions)}"
+            )
         if not request.image_url:
             raise VideoGenerationError("영상 생성에는 상품 이미지 URL이 필요합니다.")
         duration_seconds = self._validate_and_get_duration(request.script)
