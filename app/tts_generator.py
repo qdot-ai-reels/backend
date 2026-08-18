@@ -232,11 +232,6 @@ class OpenRouterTTSClient:
         return synthesize
 
 
-# Keep the existing public name while callers migrate to OpenRouter TTS.
-GoogleTTSSettings = OpenRouterTTSSettings
-GoogleTTSClient = OpenRouterTTSClient
-
-
 def read_audio_duration(audio_content: bytes) -> float:
     """Read generated MP3 duration with FFprobe."""
     with tempfile.NamedTemporaryFile(suffix=".mp3") as audio_file:

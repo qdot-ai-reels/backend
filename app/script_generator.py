@@ -321,9 +321,7 @@ class OpenRouterClient:
     def from_env(cls) -> "OpenRouterClient":
         return cls(
             api_key=os.getenv("OPENROUTER_SCRIPT_API_KEY", ""),
-            model=os.getenv("OPENROUTER_SCRIPT_MODEL")
-            or os.getenv("OPENROUTER_MODEL")
-            or DEFAULT_MODEL,
+            model=os.getenv("OPENROUTER_SCRIPT_MODEL") or DEFAULT_MODEL,
             fallback_model=os.getenv("OPENROUTER_FALLBACK_MODEL") or DEFAULT_FALLBACK_MODEL,
             api_url=os.getenv("OPENROUTER_API_URL") or DEFAULT_API_URL,
         )
@@ -334,7 +332,7 @@ class OpenRouterClient:
                 "OPENROUTER_SCRIPT_API_KEY가 설정되지 않았습니다."
             )
         if not self.model:
-            raise OpenRouterConfigurationError("OPENROUTER_MODEL이 설정되지 않았습니다.")
+            raise OpenRouterConfigurationError("OPENROUTER_SCRIPT_MODEL이 설정되지 않았습니다.")
 
         last_error: OpenRouterError | None = None
         models = [self.model]

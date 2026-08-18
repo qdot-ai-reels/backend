@@ -23,10 +23,10 @@ def build_script_client(service: SettingsService | None = None) -> OpenRouterCli
     return OpenRouterClient(
         api_key=(
             os.getenv("OPENROUTER_SCRIPT_API_KEY")
-            or service.get_openrouter_api_key()
+            or service.get_script_api_key()
             or environment_client.api_key
         ),
-        model=persisted.openrouter_model or environment_client.model,
+        model=persisted.openrouter_script_model or environment_client.model,
         fallback_model=environment_client.fallback_model,
         api_url=environment_client.api_url,
         max_attempts=max(1, persisted.script_generation_retries + 1),
@@ -36,6 +36,8 @@ def build_script_client(service: SettingsService | None = None) -> OpenRouterCli
 def get_video_model_capabilities(service: SettingsService | None = None) -> VideoModelCapabilities:
     environment_client = OpenRouterVideoClient.from_env()
     api_key = os.getenv("OPENROUTER_VIDEO_API_KEY", "")
+    if service is not None and not api_key:
+        api_key = service.get_video_api_key() or ""
     selected_model = environment_client.model
     if service is not None:
         persisted = service.get_runtime_settings()
@@ -63,6 +65,8 @@ def build_video_client(
     supported_resolutions = environment_client.supported_resolutions
     if service is not None:
         persisted = service.get_runtime_settings()
+        if not api_key:
+            api_key = service.get_video_api_key() or ""
         model = persisted.openrouter_video_model or model
         if capabilities is None:
             supported_resolutions = (persisted.video_max_resolution,)
@@ -95,9 +99,15 @@ def build_tts_settings(service: SettingsService | None = None) -> OpenRouterTTSS
         return environment_settings
     persisted = service.get_runtime_settings()
     return OpenRouterTTSSettings(
-        api_key=environment_settings.api_key,
-        model=environment_settings.model,
+        api_key=environment_settings.api_key
+        or (service.get_tts_api_key() if service is not None else "")
+        or "",
+        model=(
+            persisted.openrouter_tts_model
+            if service is not None and persisted.openrouter_tts_model
+            else environment_settings.model
+        ),
         language_code=environment_settings.language_code,
-        voice_name=persisted.google_tts_voice_name or environment_settings.voice_name,
+        voice_name=persisted.openrouter_tts_voice or environment_settings.voice_name,
         syllables_per_second=environment_settings.syllables_per_second,
     )

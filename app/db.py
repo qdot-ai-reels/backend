@@ -18,10 +18,13 @@ class GlobalSettingsRow(Base):
     __tablename__ = "global_settings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    openrouter_api_key_encrypted: Mapped[str | None] = mapped_column(String(1024))
-    openrouter_model: Mapped[str | None] = mapped_column(String(255))
+    openrouter_script_api_key_encrypted: Mapped[str | None] = mapped_column(String(1024))
+    openrouter_tts_api_key_encrypted: Mapped[str | None] = mapped_column(String(1024))
+    openrouter_video_api_key_encrypted: Mapped[str | None] = mapped_column(String(1024))
+    openrouter_script_model: Mapped[str | None] = mapped_column(String(255))
+    openrouter_tts_model: Mapped[str | None] = mapped_column(String(255))
     openrouter_video_model: Mapped[str | None] = mapped_column(String(255))
-    google_tts_voice_name: Mapped[str] = mapped_column(String(255), default="ko-KR-Standard-A")
+    openrouter_tts_voice: Mapped[str] = mapped_column(String(255), default="")
     video_min_resolution: Mapped[str] = mapped_column(String(32), default="720p")
     video_max_resolution: Mapped[str] = mapped_column(String(32), default="1080p")
     video_max_duration_seconds: Mapped[int] = mapped_column(Integer, default=15)
@@ -53,14 +56,46 @@ def init_db() -> None:
     inspector = inspect(engine)
     columns = {column["name"] for column in inspector.get_columns("global_settings")}
     missing_columns = {
+        "openrouter_script_api_key_encrypted": ("VARCHAR(1024)", "''"),
+        "openrouter_tts_api_key_encrypted": ("VARCHAR(1024)", "''"),
+        "openrouter_video_api_key_encrypted": ("VARCHAR(1024)", "''"),
+        "openrouter_tts_model": ("VARCHAR(255)", "''"),
         "video_min_resolution": ("VARCHAR(32)", "'720p'"),
         "video_max_resolution": ("VARCHAR(32)", "'1080p'"),
         "script_generation_retries": ("INTEGER", "2"),
         "video_generation_retries": ("INTEGER", "1"),
         "media_combine_retries": ("INTEGER", "3"),
+        "openrouter_tts_voice": ("VARCHAR(255)", "''"),
     }
 
     with engine.begin() as connection:
+        if "openrouter_api_key_encrypted" in columns and "openrouter_script_api_key_encrypted" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE global_settings RENAME COLUMN "
+                    "openrouter_api_key_encrypted TO openrouter_script_api_key_encrypted"
+                )
+            )
+            columns.remove("openrouter_api_key_encrypted")
+            columns.add("openrouter_script_api_key_encrypted")
+        if "openrouter_model" in columns and "openrouter_script_model" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE global_settings RENAME COLUMN "
+                    "openrouter_model TO openrouter_script_model"
+                )
+            )
+            columns.remove("openrouter_model")
+            columns.add("openrouter_script_model")
+        if "google_tts_voice_name" in columns and "openrouter_tts_voice" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE global_settings RENAME COLUMN "
+                    "google_tts_voice_name TO openrouter_tts_voice"
+                )
+            )
+            columns.remove("google_tts_voice_name")
+            columns.add("openrouter_tts_voice")
         for name, (column_type, default) in missing_columns.items():
             if name not in columns:
                 connection.execute(
@@ -107,10 +142,13 @@ class SQLAlchemySettingsRepository(SettingsRepository):
             row = GlobalSettingsRow(id=1)
             self.session.add(row)
         for field in (
-            "openrouter_api_key_encrypted",
-            "openrouter_model",
+            "openrouter_script_api_key_encrypted",
+            "openrouter_tts_api_key_encrypted",
+            "openrouter_video_api_key_encrypted",
+            "openrouter_script_model",
+            "openrouter_tts_model",
             "openrouter_video_model",
-            "google_tts_voice_name",
+            "openrouter_tts_voice",
             "video_min_resolution",
             "video_max_resolution",
             "video_max_duration_seconds",
@@ -126,10 +164,13 @@ class SQLAlchemySettingsRepository(SettingsRepository):
     @staticmethod
     def _to_domain(row: GlobalSettingsRow) -> GlobalSettings:
         return GlobalSettings(
-            openrouter_api_key_encrypted=row.openrouter_api_key_encrypted,
-            openrouter_model=row.openrouter_model,
+            openrouter_script_api_key_encrypted=row.openrouter_script_api_key_encrypted,
+            openrouter_tts_api_key_encrypted=row.openrouter_tts_api_key_encrypted,
+            openrouter_video_api_key_encrypted=row.openrouter_video_api_key_encrypted,
+            openrouter_script_model=row.openrouter_script_model,
+            openrouter_tts_model=row.openrouter_tts_model,
             openrouter_video_model=row.openrouter_video_model,
-            google_tts_voice_name=row.google_tts_voice_name,
+            openrouter_tts_voice=row.openrouter_tts_voice,
             video_min_resolution=row.video_min_resolution,
             video_max_resolution=row.video_max_resolution,
             video_max_duration_seconds=row.video_max_duration_seconds,

@@ -25,10 +25,13 @@ class ProviderCatalogError(SettingsError):
 
 @dataclass
 class GlobalSettings:
-    openrouter_api_key_encrypted: str | None = None
-    openrouter_model: str | None = None
+    openrouter_script_api_key_encrypted: str | None = None
+    openrouter_tts_api_key_encrypted: str | None = None
+    openrouter_video_api_key_encrypted: str | None = None
+    openrouter_script_model: str | None = None
+    openrouter_tts_model: str | None = None
     openrouter_video_model: str | None = None
-    google_tts_voice_name: str = "ko-KR-Standard-A"
+    openrouter_tts_voice: str = ""
     video_min_resolution: str = "720p"
     video_max_resolution: str = "1080p"
     video_max_duration_seconds: int = 15
@@ -60,10 +63,13 @@ class InMemorySettingsRepository:
 
 @dataclass(frozen=True)
 class PublicSettings:
-    api_key_configured: bool
-    openrouter_model: str | None
+    script_api_key_configured: bool
+    tts_api_key_configured: bool
+    video_api_key_configured: bool
+    openrouter_script_model: str | None
+    openrouter_tts_model: str | None
     openrouter_video_model: str | None
-    google_tts_voice_name: str
+    openrouter_tts_voice: str
     video_min_resolution: str
     video_max_resolution: str
     video_max_duration_seconds: int
@@ -92,10 +98,13 @@ class SettingsService:
     def get_public(self) -> PublicSettings:
         settings = self.repository.get()
         return PublicSettings(
-            api_key_configured=bool(settings.openrouter_api_key_encrypted),
-            openrouter_model=settings.openrouter_model,
+            script_api_key_configured=bool(settings.openrouter_script_api_key_encrypted),
+            tts_api_key_configured=bool(settings.openrouter_tts_api_key_encrypted),
+            video_api_key_configured=bool(settings.openrouter_video_api_key_encrypted),
+            openrouter_script_model=settings.openrouter_script_model,
+            openrouter_tts_model=settings.openrouter_tts_model,
             openrouter_video_model=settings.openrouter_video_model,
-            google_tts_voice_name=settings.google_tts_voice_name,
+            openrouter_tts_voice=settings.openrouter_tts_voice,
             video_min_resolution=settings.video_min_resolution,
             video_max_resolution=settings.video_max_resolution,
             video_max_duration_seconds=settings.video_max_duration_seconds,
@@ -105,14 +114,31 @@ class SettingsService:
             mute_original_audio=settings.mute_original_audio,
         )
 
-    def get_openrouter_api_key(self) -> str | None:
-        encrypted = self.repository.get().openrouter_api_key_encrypted
+    def _decrypt_key(self, encrypted: str | None, name: str) -> str | None:
         if not encrypted:
             return None
         try:
             return self.cipher.decrypt(encrypted.encode()).decode()
         except InvalidToken as error:
-            raise SettingsError("저장된 OpenRouter API Key를 복호화하지 못했습니다.") from error
+            raise SettingsError(f"저장된 {name} API Key를 복호화하지 못했습니다.") from error
+
+    def get_script_api_key(self) -> str | None:
+        return self._decrypt_key(
+            self.repository.get().openrouter_script_api_key_encrypted,
+            "스크립트용 OpenRouter",
+        )
+
+    def get_tts_api_key(self) -> str | None:
+        return self._decrypt_key(
+            self.repository.get().openrouter_tts_api_key_encrypted,
+            "TTS용 OpenRouter",
+        )
+
+    def get_video_api_key(self) -> str | None:
+        return self._decrypt_key(
+            self.repository.get().openrouter_video_api_key_encrypted,
+            "영상용 OpenRouter",
+        )
 
     def get_runtime_settings(self) -> GlobalSettings:
         """Return the current settings for a newly started generation job."""
@@ -126,22 +152,31 @@ class SettingsService:
             values.get("video_max_resolution", current.video_max_resolution),
         )
         updates = dict(values)
-        api_key = updates.pop("openrouter_api_key", None)
-        if api_key is not None:
-            current = replace(
-                current,
-                openrouter_api_key_encrypted=self.cipher.encrypt(api_key.encode()).decode(),
-            )
+        key_fields = {
+            "openrouter_script_api_key": "openrouter_script_api_key_encrypted",
+            "openrouter_tts_api_key": "openrouter_tts_api_key_encrypted",
+            "openrouter_video_api_key": "openrouter_video_api_key_encrypted",
+        }
+        for input_field, stored_field in key_fields.items():
+            api_key = updates.pop(input_field, None)
+            if api_key is not None:
+                current = replace(
+                    current,
+                    **{stored_field: self.cipher.encrypt(api_key.encode()).decode()},
+                )
         self.repository.save(replace(current, **updates))
         return self.get_public()
 
     @staticmethod
     def _validate(values: dict[str, Any]) -> None:
         allowed = {
-            "openrouter_api_key",
-            "openrouter_model",
+            "openrouter_script_api_key",
+            "openrouter_tts_api_key",
+            "openrouter_video_api_key",
+            "openrouter_script_model",
+            "openrouter_tts_model",
             "openrouter_video_model",
-            "google_tts_voice_name",
+            "openrouter_tts_voice",
             "video_min_resolution",
             "video_max_resolution",
             "video_max_duration_seconds",
@@ -165,10 +200,13 @@ class SettingsService:
         if "mute_original_audio" in values and not isinstance(values["mute_original_audio"], bool):
             raise SettingsValidationError("mute_original_audio는 boolean이어야 합니다.")
         for field in (
-            "openrouter_api_key",
-            "openrouter_model",
+            "openrouter_script_api_key",
+            "openrouter_tts_api_key",
+            "openrouter_video_api_key",
+            "openrouter_script_model",
+            "openrouter_tts_model",
             "openrouter_video_model",
-            "google_tts_voice_name",
+            "openrouter_tts_voice",
             "video_min_resolution",
             "video_max_resolution",
         ):
@@ -262,28 +300,41 @@ class OpenRouterVideoCatalogClient:
         ]
 
 
-class GoogleTTSCatalogClient:
-    def __init__(self, client: Any | None = None) -> None:
-        self.client = client or self._create_client()
+class OpenRouterTTSCatalogClient:
+    def __init__(self, api_key: str, opener: Callable[..., Any] = urlopen) -> None:
+        self.api_key = api_key
+        self.opener = opener
 
-    @staticmethod
-    def _create_client() -> Any:
+    def _list_models_payload(self) -> list[dict[str, Any]]:
+        if not self.api_key:
+            raise ProviderCatalogError("OpenRouter TTS API Key가 등록되지 않았습니다.")
+        request = Request(
+            "https://openrouter.ai/api/v1/models?output_modalities=speech",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+        )
         try:
-            from google.cloud import texttospeech
-            return texttospeech.TextToSpeechClient()
+            with self.opener(request, timeout=20) as response:
+                payload = json.loads(response.read().decode("utf-8"))
         except Exception as error:
-            raise ProviderCatalogError("Google TTS 인증 설정을 확인할 수 없습니다.") from error
+            raise ProviderCatalogError("OpenRouter TTS 모델 목록을 조회하지 못했습니다.") from error
 
-    def list_voices(self, language_code: str = "ko-KR") -> list[dict[str, Any]]:
-        try:
-            response = self.client.list_voices(request={"language_code": language_code})
-        except Exception as error:
-            raise ProviderCatalogError("Google TTS Voice 목록을 조회하지 못했습니다.") from error
         return [
-            {
-                "name": voice.name,
-                "language_codes": list(voice.language_codes),
-                "ssml_gender": str(voice.ssml_gender),
-            }
-            for voice in response.voices
+            item
+            for item in payload.get("data", [])
+            if isinstance(item, dict) and item.get("id")
         ]
+
+    def list_models(self) -> list[dict[str, Any]]:
+        return [
+            {key: item[key] for key in ("id", "name", "pricing", "supported_voices") if key in item}
+            for item in self._list_models_payload()
+        ]
+
+    def list_voices(self) -> list[dict[str, Any]]:
+        models = self._list_models_payload()
+
+        voices = []
+        for model in models:
+            for voice in model.get("supported_voices") or []:
+                voices.append({"model": model["id"], "name": voice})
+        return voices

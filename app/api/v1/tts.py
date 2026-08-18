@@ -5,7 +5,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.tts_generator import (
-    GoogleTTSClient,
+    OpenRouterTTSClient,
     NarrationValidationError,
     SceneAudioDurationError,
     TTSConfigurationError,
@@ -37,7 +37,7 @@ def generate_narration(
     if not isinstance(service, SettingsService):
         service = None
     try:
-        audio_content = GoogleTTSClient(settings=build_tts_settings(service)).generate_narration(
+        audio_content = OpenRouterTTSClient(settings=build_tts_settings(service)).generate_narration(
             body.script
         )
     except NarrationValidationError as error:
