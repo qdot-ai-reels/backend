@@ -122,12 +122,13 @@ class SettingsServiceTests(unittest.TestCase):
         )
 
         script_client = build_script_client(service)
-        video_client = build_video_client(service)
+        with patch.dict("os.environ", {"OPENROUTER_VIDEO_API_KEY": "video-key"}):
+            video_client = build_video_client(service)
         tts_settings = build_tts_settings(service)
 
         self.assertEqual(script_client.api_key, "db-key")
         self.assertEqual(script_client.model, "db-script-model")
-        self.assertEqual(video_client.api_key, "db-key")
+        self.assertEqual(video_client.api_key, "video-key")
         self.assertEqual(video_client.model, "db-video-model")
         self.assertEqual(tts_settings.voice_name, "ko-KR-Wavenet-A")
         self.assertEqual(service.get_runtime_settings().video_max_duration_seconds, 20)
@@ -136,7 +137,7 @@ class SettingsServiceTests(unittest.TestCase):
         self.assertEqual(service.get_runtime_settings().media_combine_retries, 3)
 
     def test_video_capabilities_are_used_without_database_settings(self):
-        with patch.dict("os.environ", {"OPENROUTER_API_KEY": "env-key"}):
+        with patch.dict("os.environ", {"OPENROUTER_VIDEO_API_KEY": "env-key"}):
             capabilities = VideoModelCapabilities(
                 model_id="video-model",
                 name="Video Model",

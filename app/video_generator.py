@@ -104,7 +104,7 @@ class OpenRouterVideoClient:
     @classmethod
     def from_env(cls) -> "OpenRouterVideoClient":
         return cls(
-            api_key=os.getenv("OPENROUTER_API_KEY", ""),
+            api_key=os.getenv("OPENROUTER_VIDEO_API_KEY", ""),
             model=os.getenv("OPENROUTER_VIDEO_MODEL") or DEFAULT_VIDEO_MODEL,
             api_url=os.getenv("OPENROUTER_VIDEO_API_URL") or DEFAULT_VIDEO_API_URL,
             supported_durations=tuple(
@@ -115,7 +115,9 @@ class OpenRouterVideoClient:
 
     def generate_video(self, request: VideoGenerationRequest) -> VideoGenerationResult:
         if not self.api_key:
-            raise OpenRouterConfigurationError("OPENROUTER_API_KEY가 설정되지 않았습니다.")
+            raise OpenRouterConfigurationError(
+                "OPENROUTER_VIDEO_API_KEY가 설정되지 않았습니다."
+            )
         if request.aspect_ratio not in self.supported_aspect_ratios:
             raise VideoGenerationError(
                 f"선택한 모델은 {request.aspect_ratio} 비율을 지원하지 않습니다. "

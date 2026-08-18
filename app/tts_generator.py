@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
 class TTSGenerationError(RuntimeError):
-    """Raised when Google TTS cannot generate the narration."""
+    """Raised when the configured TTS provider cannot generate narration."""
 
 
 class TTSConfigurationError(TTSGenerationError):
-    """Raised when the local Google TTS configuration is incomplete."""
+    """Raised when the local TTS configuration is incomplete."""
 
 
 class NarrationValidationError(TTSGenerationError):
@@ -103,24 +106,28 @@ def build_scene_narrations(script: Mapping[str, Any]) -> list[SceneNarration]:
 
 
 @dataclass(frozen=True)
-class GoogleTTSSettings:
+class OpenRouterTTSSettings:
+    api_key: str = ""
+    model: str = ""
+    voice_name: str = ""
     language_code: str = "ko-KR"
-    voice_name: str = "ko-KR-Standard-A"
     syllables_per_second: float = 4.5
 
     @classmethod
-    def from_env(cls) -> "GoogleTTSSettings":
+    def from_env(cls) -> "OpenRouterTTSSettings":
         return cls(
+            api_key=os.getenv("OPENROUTER_TTS_API_KEY", ""),
+            model=os.getenv("OPENROUTER_TTS_MODEL", ""),
+            voice_name=os.getenv("OPENROUTER_TTS_VOICE", ""),
             language_code=os.getenv("GOOGLE_TTS_LANGUAGE_CODE", "ko-KR"),
-            voice_name=os.getenv("GOOGLE_TTS_VOICE_NAME", "ko-KR-Standard-A"),
             syllables_per_second=float(
                 os.getenv("GOOGLE_TTS_SYLLABLES_PER_SECOND", "4.5")
             ),
         )
 
 
-class GoogleTTSClient:
-    """Create scene audio tracks and combine them into one MP3 narration."""
+class OpenRouterTTSClient:
+    """Create scene audio tracks through OpenRouter and combine them into one MP3."""
 
     def __init__(
         self,
@@ -128,12 +135,12 @@ class GoogleTTSClient:
         combiner: Callable[[Sequence[SceneNarration]], bytes] | None = None,
         duration_reader: Callable[[bytes], float] | None = None,
         duration_tolerance_seconds: float = 0.1,
-        settings: GoogleTTSSettings | None = None,
+        settings: OpenRouterTTSSettings | None = None,
     ) -> None:
         if duration_tolerance_seconds < 0:
             raise ValueError("duration_tolerance_seconds는 0 이상이어야 합니다.")
-        self.settings = settings or GoogleTTSSettings.from_env()
-        self.synthesizer = synthesizer or self._create_google_synthesizer()
+        self.settings = settings or OpenRouterTTSSettings.from_env()
+        self.synthesizer = synthesizer or self._create_openrouter_synthesizer()
         self.combiner = combiner or combine_scene_audio
         self.duration_reader = duration_reader or read_audio_duration
         self.duration_tolerance_seconds = duration_tolerance_seconds
@@ -151,7 +158,7 @@ class GoogleTTSClient:
                 raise
             except Exception as error:
                 raise TTSGenerationError(
-                    f"{narration.scene_number}번째 장면의 Google TTS 생성에 실패했습니다."
+                    f"{narration.scene_number}번째 장면의 TTS 생성에 실패했습니다."
                 ) from error
             expected_seconds = narration.end_seconds - narration.start_seconds
             actual_seconds = self.duration_reader(audio_content)
@@ -183,35 +190,51 @@ class GoogleTTSClient:
             raise TTSGenerationError("음성 결합 결과가 비어 있습니다.")
         return combined_audio
 
-    def _create_google_synthesizer(self) -> Callable[[str], bytes]:
-        try:
-            from google.cloud import texttospeech
-        except ImportError as error:
+    def _create_openrouter_synthesizer(self) -> Callable[[str], bytes]:
+        if not self.settings.api_key:
             raise TTSConfigurationError(
-                "google-cloud-texttospeech 패키지가 설치되지 않았습니다."
-            ) from error
-
-        try:
-            client = texttospeech.TextToSpeechClient()
-        except Exception as error:
+                "OPENROUTER_TTS_API_KEY가 설정되지 않았습니다."
+            )
+        if not self.settings.model:
             raise TTSConfigurationError(
-                "Google TTS 인증 설정을 확인할 수 없습니다."
-            ) from error
+                "OPENROUTER_TTS_MODEL이 설정되지 않았습니다."
+            )
 
         def synthesize(text: str) -> bytes:
-            response = client.synthesize_speech(
-                input=texttospeech.SynthesisInput(text=text),
-                voice=texttospeech.VoiceSelectionParams(
-                    language_code=self.settings.language_code,
-                    name=self.settings.voice_name,
-                ),
-                audio_config=texttospeech.AudioConfig(
-                    audio_encoding=texttospeech.AudioEncoding.MP3,
-                ),
+            payload = {
+                "input": text,
+                "model": self.settings.model,
+                "response_format": "mp3",
+            }
+            if self.settings.voice_name.strip():
+                payload["voice"] = self.settings.voice_name.strip()
+            request = Request(
+                "https://openrouter.ai/api/v1/audio/speech",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {self.settings.api_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
             )
-            return response.audio_content
+            try:
+                with urlopen(request, timeout=60) as response:
+                    return response.read()
+            except HTTPError as error:
+                raise TTSGenerationError(
+                    f"OpenRouter TTS 요청이 거부되었습니다: HTTP {error.code}"
+                ) from error
+            except URLError as error:
+                raise TTSGenerationError(
+                    "OpenRouter TTS 서버에 연결하지 못했습니다."
+                ) from error
 
         return synthesize
+
+
+# Keep the existing public name while callers migrate to OpenRouter TTS.
+GoogleTTSSettings = OpenRouterTTSSettings
+GoogleTTSClient = OpenRouterTTSClient
 
 
 def read_audio_duration(audio_content: bytes) -> float:

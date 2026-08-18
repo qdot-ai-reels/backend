@@ -1,10 +1,14 @@
+import json
 import unittest
+from unittest.mock import patch
 
 from app.tts_generator import (
     GoogleTTSClient,
     NarrationValidationError,
     SceneAudioDurationError,
     SceneNarration,
+    OpenRouterTTSClient,
+    OpenRouterTTSSettings,
     build_scene_narrations,
 )
 
@@ -19,6 +23,58 @@ SCRIPT = {
 
 
 class TTSGeneratorTests(unittest.TestCase):
+    @patch("app.tts_generator.urlopen")
+    def test_omits_voice_when_not_configured(self, urlopen):
+        response = type(
+            "Response",
+            (),
+            {
+                "__enter__": lambda self: self,
+                "__exit__": lambda self, *_args: None,
+                "read": lambda self: b"mp3-bytes",
+            },
+        )()
+        urlopen.return_value = response
+
+        client = OpenRouterTTSClient(
+            settings=OpenRouterTTSSettings(
+                api_key="test-key",
+                model="fish-audio/s2.1-pro-free:free",
+                voice_name="",
+            )
+        )
+
+        self.assertEqual(client.synthesizer("안녕하세요."), b"mp3-bytes")
+        request = urlopen.call_args.args[0]
+        payload = json.loads(request.data)
+        self.assertNotIn("voice", payload)
+        self.assertEqual(payload["model"], "fish-audio/s2.1-pro-free:free")
+
+    @patch("app.tts_generator.urlopen")
+    def test_includes_configured_voice(self, urlopen):
+        response = type(
+            "Response",
+            (),
+            {
+                "__enter__": lambda self: self,
+                "__exit__": lambda self, *_args: None,
+                "read": lambda self: b"mp3-bytes",
+            },
+        )()
+        urlopen.return_value = response
+
+        client = OpenRouterTTSClient(
+            settings=OpenRouterTTSSettings(
+                api_key="test-key",
+                model="test-model",
+                voice_name="test-voice",
+            )
+        )
+
+        client.synthesizer("테스트")
+        payload = json.loads(urlopen.call_args.args[0].data)
+        self.assertEqual(payload["voice"], "test-voice")
+
     def test_builds_scene_narrations_with_time_ranges(self):
         self.assertEqual(
             build_scene_narrations(SCRIPT),

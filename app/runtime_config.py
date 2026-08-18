@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from app.script_generator import OpenRouterClient
 from app.settings_service import (
     OpenRouterVideoCatalogClient,
@@ -9,7 +11,7 @@ from app.settings_service import (
     SettingsService,
     VideoModelCapabilities,
 )
-from app.tts_generator import GoogleTTSSettings
+from app.tts_generator import OpenRouterTTSSettings
 from app.video_generator import OpenRouterVideoClient
 
 
@@ -19,7 +21,11 @@ def build_script_client(service: SettingsService | None = None) -> OpenRouterCli
         return environment_client
     persisted = service.get_runtime_settings()
     return OpenRouterClient(
-        api_key=service.get_openrouter_api_key() or environment_client.api_key,
+        api_key=(
+            os.getenv("OPENROUTER_SCRIPT_API_KEY")
+            or service.get_openrouter_api_key()
+            or environment_client.api_key
+        ),
         model=persisted.openrouter_model or environment_client.model,
         fallback_model=environment_client.fallback_model,
         api_url=environment_client.api_url,
@@ -29,11 +35,10 @@ def build_script_client(service: SettingsService | None = None) -> OpenRouterCli
 
 def get_video_model_capabilities(service: SettingsService | None = None) -> VideoModelCapabilities:
     environment_client = OpenRouterVideoClient.from_env()
-    api_key = environment_client.api_key
+    api_key = os.getenv("OPENROUTER_VIDEO_API_KEY", "")
     selected_model = environment_client.model
     if service is not None:
         persisted = service.get_runtime_settings()
-        api_key = service.get_openrouter_api_key() or api_key
         selected_model = persisted.openrouter_video_model or selected_model
 
     catalog = OpenRouterVideoCatalogClient(api_key)
@@ -58,7 +63,6 @@ def build_video_client(
     supported_resolutions = environment_client.supported_resolutions
     if service is not None:
         persisted = service.get_runtime_settings()
-        api_key = service.get_openrouter_api_key() or api_key
         model = persisted.openrouter_video_model or model
         if capabilities is None:
             supported_resolutions = (persisted.video_max_resolution,)
@@ -85,12 +89,14 @@ def build_video_client(
     )
 
 
-def build_tts_settings(service: SettingsService | None = None) -> GoogleTTSSettings:
-    environment_settings = GoogleTTSSettings.from_env()
+def build_tts_settings(service: SettingsService | None = None) -> OpenRouterTTSSettings:
+    environment_settings = OpenRouterTTSSettings.from_env()
     if service is None:
         return environment_settings
     persisted = service.get_runtime_settings()
-    return GoogleTTSSettings(
+    return OpenRouterTTSSettings(
+        api_key=environment_settings.api_key,
+        model=environment_settings.model,
         language_code=environment_settings.language_code,
         voice_name=persisted.google_tts_voice_name or environment_settings.voice_name,
         syllables_per_second=environment_settings.syllables_per_second,
