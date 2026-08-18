@@ -45,13 +45,19 @@ class ScriptApiTests(unittest.TestCase):
         client = FakeScriptClient()
         build_client.return_value = client
         body = ScriptGenerationBody(
-            product={"brand_name": "프랭클린", "product_name": "아기 주방세제"}
+            product={"brand_name": "프랭클린", "product_name": "아기 주방세제"},
+            image_url="https://example.com/product.jpg",
+            reviews=["거품이 잘 납니다."],
+            prompt="30초 이내 광고로 작성",
         )
 
         result = generate_script(body)
 
         self.assertEqual(result["summary"]["key_message"], "메시지")
         self.assertEqual(client.last_request.product["brand_name"], "프랭클린")
+        self.assertEqual(client.last_request.image_url, "https://example.com/product.jpg")
+        self.assertEqual(client.last_request.reviews, ["거품이 잘 납니다."])
+        self.assertEqual(client.last_request.custom_prompt, "30초 이내 광고로 작성")
 
 
 if __name__ == "__main__":

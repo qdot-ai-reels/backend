@@ -19,6 +19,9 @@ router = APIRouter()
 
 class ScriptGenerationBody(BaseModel):
     product: dict[str, Any] = Field(min_length=1)
+    image_url: str | None = None
+    reviews: list[Any] = Field(default_factory=list)
+    prompt: str | None = None
     max_duration_seconds: int | None = Field(default=None, ge=1, le=30)
     channel: str = "Instagram Reels"
     target_audience: str = "육아에 관심 있는 보호자"
@@ -40,6 +43,9 @@ def generate_script(
     )
     request = ScriptGenerationRequest(
         product=body.product,
+        image_url=body.image_url,
+        reviews=body.reviews,
+        custom_prompt=body.prompt,
         max_duration_seconds=max_duration_seconds,
         channel=body.channel,
         target_audience=body.target_audience,
