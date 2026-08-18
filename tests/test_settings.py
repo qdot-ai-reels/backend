@@ -2,14 +2,19 @@ import unittest
 from unittest.mock import patch
 from unittest.mock import Mock
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from app.api.v1.settings import (
     SettingsUpdateBody,
-    get_google_tts_catalog,
-    get_openrouter_catalog,
     get_settings,
     update_settings,
     list_google_tts_voices,
     list_openrouter_models,
+    router,
+    get_settings_repository,
+    get_openrouter_catalog,
+    get_google_tts_catalog,
 )
 from app.settings_service import (
     InMemorySettingsRepository,
@@ -19,6 +24,7 @@ from app.settings_service import (
     SettingsValidationError,
 )
 from app.db import Base, SQLAlchemySettingsRepository, GlobalSettingsRow
+from app.runtime_config import build_script_client, build_tts_settings, build_video_client
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -67,6 +73,33 @@ class SettingsServiceTests(unittest.TestCase):
 
         self.assertEqual(repository.get().openrouter_model, "model-a")
         self.assertEqual(session.query(GlobalSettingsRow).count(), 1)
+
+    def test_saved_settings_are_used_by_generation_clients(self):
+        service = SettingsService(
+            InMemorySettingsRepository(), encryption_key=SettingsService.test_key()
+        )
+        service.update(
+            {
+                "openrouter_api_key": "db-key",
+                "openrouter_model": "db-script-model",
+                "openrouter_video_model": "db-video-model",
+                "google_tts_voice_name": "ko-KR-Wavenet-A",
+                "video_max_duration_seconds": 20,
+                "max_retries": 3,
+            }
+        )
+
+        script_client = build_script_client(service)
+        video_client = build_video_client(service)
+        tts_settings = build_tts_settings(service)
+
+        self.assertEqual(script_client.api_key, "db-key")
+        self.assertEqual(script_client.model, "db-script-model")
+        self.assertEqual(video_client.api_key, "db-key")
+        self.assertEqual(video_client.model, "db-video-model")
+        self.assertEqual(tts_settings.voice_name, "ko-KR-Wavenet-A")
+        self.assertEqual(service.get_runtime_settings().video_max_duration_seconds, 20)
+        self.assertEqual(service.get_runtime_settings().max_retries, 3)
 
 
 class ProviderCatalogTests(unittest.TestCase):
@@ -132,3 +165,35 @@ class DatabaseLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 pass
 
         init_db.assert_called_once_with()
+
+
+class SettingsHttpTests(unittest.TestCase):
+    def test_settings_routes_return_http_responses(self):
+        app = FastAPI()
+        app.include_router(router, prefix="/api/v1")
+        service = SettingsService(
+            InMemorySettingsRepository(), encryption_key=SettingsService.test_key()
+        )
+        openrouter = Mock(list_models=Mock(return_value=[{"id": "m1", "name": "M1"}]))
+        google = Mock(list_voices=Mock(return_value=[{"name": "v1"}]))
+        app.dependency_overrides[get_settings_repository] = lambda: service
+        app.dependency_overrides[get_openrouter_catalog] = lambda: openrouter
+        app.dependency_overrides[get_google_tts_catalog] = lambda: google
+
+        with TestClient(app) as client:
+            update_response = client.put(
+                "/api/v1/settings",
+                json={"openrouter_api_key": "sk-secret", "openrouter_model": "m1"},
+            )
+            settings_response = client.get("/api/v1/settings")
+            models_response = client.get("/api/v1/settings/openrouter/models")
+            voices_response = client.get("/api/v1/settings/google-tts/voices")
+
+        self.assertEqual(update_response.status_code, 200)
+        self.assertEqual(settings_response.status_code, 200)
+        self.assertEqual(models_response.status_code, 200)
+        self.assertEqual(voices_response.status_code, 200)
+        self.assertNotIn("sk-secret", update_response.text)
+        self.assertEqual(settings_response.json()["openrouter_model"], "m1")
+        self.assertEqual(models_response.json(), [{"id": "m1", "name": "M1"}])
+        self.assertEqual(voices_response.json(), [{"name": "v1"}])

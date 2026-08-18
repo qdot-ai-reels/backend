@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -11,6 +11,9 @@ from app.tts_generator import (
     TTSConfigurationError,
     TTSGenerationError,
 )
+from app.api.v1.settings import get_settings_repository
+from app.runtime_config import build_tts_settings
+from app.settings_service import SettingsService
 
 
 router = APIRouter()
@@ -27,9 +30,16 @@ class TTSGenerationBody(BaseModel):
     summary="전체 스크립트의 내레이션을 하나의 MP3로 생성",
     responses={200: {"content": {"audio/mpeg": {}}}},
 )
-def generate_narration(body: TTSGenerationBody) -> Response:
+def generate_narration(
+    body: TTSGenerationBody,
+    service: SettingsService | None = Depends(get_settings_repository),
+) -> Response:
+    if not isinstance(service, SettingsService):
+        service = None
     try:
-        audio_content = GoogleTTSClient().generate_narration(body.script)
+        audio_content = GoogleTTSClient(settings=build_tts_settings(service)).generate_narration(
+            body.script
+        )
     except NarrationValidationError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

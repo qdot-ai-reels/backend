@@ -105,6 +105,10 @@ class SettingsService:
         except InvalidToken as error:
             raise SettingsError("저장된 OpenRouter API Key를 복호화하지 못했습니다.") from error
 
+    def get_runtime_settings(self) -> GlobalSettings:
+        """Return the current settings for a newly started generation job."""
+        return self.repository.get()
+
     def update(self, values: dict[str, Any]) -> PublicSettings:
         self._validate(values)
         current = self.repository.get()
@@ -191,4 +195,3 @@ class GoogleTTSCatalogClient:
             }
             for voice in response.voices
         ]
-

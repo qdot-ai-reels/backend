@@ -9,3 +9,4 @@ boto3
 botocore
 google-cloud-texttospeech
 cryptography
+httpx2

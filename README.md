@@ -45,6 +45,18 @@ docker compose up -d --build
 
 ## OpenRouter 스크립트 생성
 
+### 설정 암호화 키
+
+설정 화면에서 저장하는 OpenRouter API Key는 DB에 암호화하여 저장합니다.
+암호화 키 자체는 DB나 Git에 저장하지 않고 환경변수로 관리합니다.
+
+```bash
+.venv/bin/python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+출력된 값을 `.env`의 `SETTINGS_ENCRYPTION_KEY`에 저장한 뒤 서버를 시작합니다.
+이 값은 운영 환경에서도 동일하게 유지해야 기존에 저장한 API Key를 복호화할 수 있습니다.
+
 `app/script_generator.py`의 `OpenRouterClient`는 공구 상품 정보를 받아
 권예빈 문서 형식의 구조화된 광고 스크립트 JSON을 생성합니다.
 
