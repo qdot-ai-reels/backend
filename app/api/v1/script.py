@@ -36,7 +36,7 @@ def generate_script(
     if not isinstance(service, SettingsService):
         service = None
     max_duration_seconds = body.max_duration_seconds or (
-        service.get_runtime_settings().video_max_duration_seconds if service else 30
+        service.get_runtime_settings().video_max_duration_seconds if service else 15
     )
     request = ScriptGenerationRequest(
         product=body.product,

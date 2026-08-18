@@ -32,7 +32,7 @@ class VideoGenerationError(RuntimeError):
 class VideoGenerationRequest:
     script: Mapping[str, Any]
     image_url: str
-    resolution: str = "720p"
+    resolution: str = "1080p"
     aspect_ratio: str = "9:16"
     generate_audio: bool = False
 
@@ -83,7 +83,7 @@ class OpenRouterVideoClient:
         max_poll_attempts: int = 24,
         supported_durations: tuple[int, ...] = DEFAULT_SUPPORTED_DURATIONS,
         supported_aspect_ratios: tuple[str, ...] = ("9:16",),
-        supported_resolutions: tuple[str, ...] = ("720p",),
+        supported_resolutions: tuple[str, ...] = ("1080p",),
         opener: Callable[..., Any] = urlopen,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:

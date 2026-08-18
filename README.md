@@ -159,7 +159,7 @@ Content-Type: application/json
     }
   },
   "image_url": "https://example.com/product.jpg",
-  "resolution": "720p",
+  "resolution": "1080p",
   "aspect_ratio": "9:16",
   "generate_audio": false
 }

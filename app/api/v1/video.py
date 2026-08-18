@@ -40,21 +40,29 @@ def generate_video(
 ) -> dict[str, Any]:
     if not isinstance(service, SettingsService):
         service = None
-    resolution = body.resolution or (
-        service.get_runtime_settings().video_resolution if service else "720p"
-    )
     request = VideoGenerationRequest(
         script=body.script,
         image_url=body.image_url,
-        resolution=resolution,
+        resolution=body.resolution or "1080p",
         aspect_ratio=body.aspect_ratio,
         generate_audio=body.generate_audio,
     )
 
     try:
         capabilities = get_video_model_capabilities(service)
+        if body.resolution is None:
+            resolution = select_video_resolution(service, capabilities)
+            request = request.__class__(
+                script=request.script,
+                image_url=request.image_url,
+                resolution=resolution,
+                aspect_ratio=request.aspect_ratio,
+                generate_audio=request.generate_audio,
+            )
         client = build_video_client(service, capabilities)
-        max_retries = service.get_runtime_settings().max_retries if service else 1
+        max_retries = (
+            service.get_runtime_settings().video_generation_retries if service else 1
+        )
         result = VideoValidationPipeline(
             generate_video=lambda pipeline_request, _attempt: client.generate_video(
                 pipeline_request
@@ -82,3 +90,26 @@ def generate_video(
         "attempts": result.attempts,
         "validation": result.validation.checks,
     }
+
+
+def select_video_resolution(
+    service: SettingsService | None,
+    capabilities: Any,
+) -> str:
+    minimum = service.get_runtime_settings().video_min_resolution if service else "720p"
+    maximum = service.get_runtime_settings().video_max_resolution if service else "1080p"
+
+    def pixels(value: str) -> int:
+        numeric = value.rstrip("p")
+        return int(numeric) if numeric.isdigit() else 0
+
+    candidates = [
+        resolution
+        for resolution in capabilities.supported_resolutions
+        if pixels(minimum) <= pixels(resolution) <= pixels(maximum)
+    ]
+    if not candidates:
+        raise VideoGenerationError(
+            f"모델이 설정된 해상도 범위를 지원하지 않습니다: {minimum}~{maximum}"
+        )
+    return max(candidates, key=pixels)
