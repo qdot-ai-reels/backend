@@ -27,7 +27,6 @@ class SettingsUpdateBody(BaseModel):
     video_resolution: str | None = None
     video_max_duration_seconds: int | None = Field(default=None, ge=1, le=30)
     max_retries: int | None = Field(default=None, ge=0, le=5)
-    mute_original_audio: bool | None = None
 
 
 def get_settings_repository() -> Generator[SettingsService, None, None]:
@@ -41,6 +40,16 @@ def get_settings_repository() -> Generator[SettingsService, None, None]:
         )
     finally:
         session.close()
+
+
+def get_optional_settings_repository() -> Generator[SettingsService | None, None, None]:
+    """Use DB settings when encryption is configured; otherwise keep env fallback."""
+    from app.core.config import settings
+
+    if not settings.SETTINGS_ENCRYPTION_KEY:
+        yield None
+        return
+    yield from get_settings_repository()
 
 
 def get_openrouter_catalog() -> OpenRouterCatalogClient:

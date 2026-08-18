@@ -13,7 +13,7 @@ from app.video_validation_pipeline import (
     VideoValidationPipeline,
     VideoValidationPipelineError,
 )
-from app.api.v1.settings import get_settings_repository
+from app.api.v1.settings import get_optional_settings_repository
 from app.runtime_config import build_video_client
 from app.settings_service import SettingsService
 
@@ -36,7 +36,7 @@ class VideoGenerationBody(BaseModel):
 )
 def generate_video(
     body: VideoGenerationBody,
-    service: SettingsService | None = Depends(get_settings_repository),
+    service: SettingsService | None = Depends(get_optional_settings_repository),
 ) -> dict[str, Any]:
     if not isinstance(service, SettingsService):
         service = None

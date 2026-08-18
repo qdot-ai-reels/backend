@@ -11,7 +11,7 @@ from app.tts_generator import (
     TTSConfigurationError,
     TTSGenerationError,
 )
-from app.api.v1.settings import get_settings_repository
+from app.api.v1.settings import get_optional_settings_repository
 from app.runtime_config import build_tts_settings
 from app.settings_service import SettingsService
 
@@ -32,7 +32,7 @@ class TTSGenerationBody(BaseModel):
 )
 def generate_narration(
     body: TTSGenerationBody,
-    service: SettingsService | None = Depends(get_settings_repository),
+    service: SettingsService | None = Depends(get_optional_settings_repository),
 ) -> Response:
     if not isinstance(service, SettingsService):
         service = None

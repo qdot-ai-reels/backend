@@ -32,7 +32,6 @@ class GlobalSettings:
     video_resolution: str = "720p"
     video_max_duration_seconds: int = 30
     max_retries: int = 2
-    mute_original_audio: bool = True
 
 
 class SettingsRepository(Protocol):
@@ -64,7 +63,6 @@ class PublicSettings:
     video_resolution: str
     video_max_duration_seconds: int
     max_retries: int
-    mute_original_audio: bool
 
 
 class SettingsService:
@@ -93,7 +91,6 @@ class SettingsService:
             video_resolution=settings.video_resolution,
             video_max_duration_seconds=settings.video_max_duration_seconds,
             max_retries=settings.max_retries,
-            mute_original_audio=settings.mute_original_audio,
         )
 
     def get_openrouter_api_key(self) -> str | None:
@@ -132,7 +129,6 @@ class SettingsService:
             "video_resolution",
             "video_max_duration_seconds",
             "max_retries",
-            "mute_original_audio",
         }
         unknown = set(values) - allowed
         if unknown:

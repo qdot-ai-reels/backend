@@ -57,6 +57,7 @@ class ScriptGenerationRequest:
     max_duration_seconds: int = 30
     channel: str = "Instagram Reels"
     target_audience: str = "육아에 관심 있는 보호자"
+    supported_video_durations: tuple[int, ...] | None = None
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_duration_seconds <= MAX_SCRIPT_DURATION_SECONDS:
@@ -99,6 +100,7 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - 자막은 짧게 작성하고 화면에 넣을 문구와 내레이션을 구분
 - 대사는 장면 시간 안에 읽을 수 있도록 작성하고, 평균 1초당 4.5음절을 기준으로 계산
 - 각 장면의 대사 음절 수가 해당 장면 시간 x 4.5를 넘지 않도록 작성
+{"- 최종 장면 종료 시간은 다음 중 하나로 작성: " + ", ".join(str(value) for value in request.supported_video_durations) if request.supported_video_durations else ""}
 {"- USP가 비어있거나 null인 경우, 상품 데이터의 다른 정보만을 바탕으로 소비자의 구매를 유도할 수 있는 핵심 소구점(USP)을 도출해 최종 스크립트에 반영하세요." if not has_usp else ""}
 
 다음 JSON 객체만 반환하세요. Markdown 코드블록이나 설명은 붙이지 마세요.

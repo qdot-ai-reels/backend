@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Integer, String, create_engine, select
+from sqlalchemy import DateTime, Integer, String, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.settings_service import GlobalSettings, SettingsRepository
@@ -26,7 +25,6 @@ class GlobalSettingsRow(Base):
     video_resolution: Mapped[str] = mapped_column(String(32), default="720p")
     video_max_duration_seconds: Mapped[int] = mapped_column(Integer, default=30)
     max_retries: Mapped[int] = mapped_column(Integer, default=2)
-    mute_original_audio: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -35,7 +33,9 @@ class GlobalSettingsRow(Base):
 
 
 def get_engine():
-    database_url = os.getenv("DATABASE_URL", "sqlite:///./quedot.local.db")
+    from app.core.config import settings
+
+    database_url = settings.DATABASE_URL or "sqlite:///./quedot.local.db"
     connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
     return create_engine(database_url, connect_args=connect_args, pool_pre_ping=True)
 
@@ -74,7 +74,6 @@ class SQLAlchemySettingsRepository(SettingsRepository):
             "video_resolution",
             "video_max_duration_seconds",
             "max_retries",
-            "mute_original_audio",
         ):
             setattr(row, field, getattr(settings, field))
         self.session.commit()
@@ -90,5 +89,4 @@ class SQLAlchemySettingsRepository(SettingsRepository):
             video_resolution=row.video_resolution,
             video_max_duration_seconds=row.video_max_duration_seconds,
             max_retries=row.max_retries,
-            mute_original_audio=row.mute_original_audio,
         )
