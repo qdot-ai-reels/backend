@@ -3,6 +3,7 @@ import os
 import unittest
 from unittest.mock import patch
 from app.script_generator import (
+    MAX_SCRIPT_DURATION_SECONDS,
     OpenRouterClient,
     OpenRouterConfigurationError,
     ScriptGenerationRequest,
@@ -25,22 +26,33 @@ PRODUCT = {
 
 VALID_DOCUMENT = {
     "meta": {
-        "aspect_ratio": "9:16",
-        "max_duration_sec": 30,
-        "channel": "Instagram Reels",
+        "output_format_version": "1.0",
+        "framework": "Hook-Body-CTA",
+        "language": "ko",
     },
-    "summary": "아기 식기를 위한 주방세제를 소개합니다.",
+    "summary": {
+        "main_target": "아기 식기를 사용하는 보호자",
+        "pain_point": "성분이 걱정되는 보호자",
+        "product_usp": "비건 인증",
+        "key_message": "성분을 확인하고 사용하세요.",
+        "tone_and_manner": "차분한 생활형 광고",
+    },
     "scenes": [
         {
-            "scene_number": 1,
-            "time_range_sec": [0, 3],
+            "scene_name": "Hook",
+            "time_range_sec": {"start": 0, "end": 3},
             "visual": "제품을 화면 중앙에 보여준다.",
-            "subtitle": "아기 식기 세제",
-            "voiceover": "성분 확인하세요.",
-            "intent": "hook",
+            "auditory": {
+                "subtitle": "아기 식기 세제",
+                "voiceover": "성분 확인하세요.",
+            },
+            "notes": "제품을 먼저 보여준다.",
         }
     ],
-    "compliance_notes": ["제공된 상품 정보만 사용"],
+    "compliance_notes": {
+        "avoid": ["상품 정보에 없는 효능"],
+        "focus": ["제공된 상품 정보"],
+    },
 }
 
 
@@ -69,6 +81,13 @@ class SequentialOpener:
 
 
 class ScriptGeneratorTests(unittest.TestCase):
+    def test_rejects_script_request_above_product_maximum_duration(self):
+        with self.assertRaises(ValueError):
+            ScriptGenerationRequest(
+                product=PRODUCT,
+                max_duration_seconds=MAX_SCRIPT_DURATION_SECONDS + 1,
+            )
+
     def test_extracts_json_from_markdown_code_fence(self):
         content = f"```json\n{json.dumps(VALID_DOCUMENT, ensure_ascii=False)}\n```"
 
@@ -80,31 +99,42 @@ class ScriptGeneratorTests(unittest.TestCase):
         with self.assertRaises(ScriptValidationError):
             validate_script_document(invalid_document)
 
-    def test_rejects_script_with_wrong_aspect_ratio(self):
+    def test_rejects_legacy_script_output_shape(self):
+        legacy_document = {
+            "meta": {"aspect_ratio": "9:16", "max_duration_sec": 30},
+            "summary": "기존 형식",
+            "scenes": [{"time_range_sec": [0, 3]}],
+            "compliance_notes": [],
+        }
+
+        with self.assertRaises(ScriptValidationError):
+            validate_script_document(legacy_document)
+
+    def test_rejects_script_without_output_format_metadata(self):
         invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
-        invalid_document["meta"]["aspect_ratio"] = "9:12"
+        del invalid_document["meta"]["language"]
 
         with self.assertRaises(ScriptValidationError):
             validate_script_document(invalid_document)
 
     def test_rejects_scene_with_invalid_time_range(self):
         invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
-        invalid_document["scenes"][0]["time_range_sec"] = [3, 1]
+        invalid_document["scenes"][0]["time_range_sec"] = {"start": 3, "end": 1}
 
         with self.assertRaises(ScriptValidationError):
             validate_script_document(invalid_document)
 
     def test_rejects_scene_ending_after_requested_max_duration(self):
         invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
-        invalid_document["scenes"][0]["time_range_sec"] = [0, 31]
+        invalid_document["scenes"][0]["time_range_sec"] = {"start": 0, "end": 31}
 
         with self.assertRaises(ScriptValidationError):
             validate_script_document(invalid_document, max_duration_seconds=30)
 
     def test_rejects_scene_dialogue_longer_than_time_range(self):
         invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
-        invalid_document["scenes"][0]["time_range_sec"] = [0, 1]
-        invalid_document["scenes"][0]["voiceover"] = "이 장면에서 읽기에는 너무 긴 광고 대사입니다."
+        invalid_document["scenes"][0]["time_range_sec"] = {"start": 0, "end": 1}
+        invalid_document["scenes"][0]["auditory"]["voiceover"] = "이 장면에서 읽기에는 너무 긴 광고 대사입니다."
 
         with self.assertRaises(ScriptValidationError):
             validate_script_document(invalid_document)
@@ -151,6 +181,15 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("프랭클린", body["messages"][0]["content"])
         self.assertIn("4.5음절", body["messages"][0]["content"])
 
+    def test_prompt_uses_structured_output_without_video_settings_in_meta(self):
+        prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
+
+        self.assertIn('"output_format_version"', prompt)
+        self.assertIn('"time_range_sec": {"start": 0, "end": 3}', prompt)
+        self.assertIn('"auditory"', prompt)
+        self.assertNotIn('"aspect_ratio": "9:16"', prompt)
+        self.assertNotIn('"max_duration_sec": 30', prompt)
+
     def test_asks_model_to_derive_missing_usp_without_mutating_product(self):
         response_payload = {
             "choices": [{
@@ -193,21 +232,14 @@ class ScriptGeneratorTests(unittest.TestCase):
 
         self.assertIn("USP가 비어있거나 null인 경우", prompt)
 
-    def test_rejects_script_when_meta_duration_does_not_match_request(self):
-        document = json.loads(json.dumps(VALID_DOCUMENT))
-        document["meta"]["max_duration_sec"] = 8
-
-        with self.assertRaises(ScriptValidationError):
-            validate_script_document(document, max_duration_seconds=30)
-
     def test_accepts_null_voiceover_but_requires_script_output_fields(self):
         document = json.loads(json.dumps(VALID_DOCUMENT))
-        document["scenes"][0]["voiceover"] = None
+        document["scenes"][0]["auditory"]["voiceover"] = None
 
         self.assertEqual(validate_script_document(document), document)
 
         missing_field = json.loads(json.dumps(document))
-        del missing_field["scenes"][0]["voiceover"]
+        del missing_field["scenes"][0]["auditory"]["voiceover"]
         with self.assertRaises(ScriptValidationError):
             validate_script_document(missing_field)
 
@@ -253,7 +285,7 @@ class ScriptGeneratorTests(unittest.TestCase):
 
     def test_retries_with_fallback_model_after_schema_failure(self):
         invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
-        invalid_document["meta"]["aspect_ratio"] = "9:12"
+        del invalid_document["meta"]["framework"]
         opener = SequentialOpener([
             {"choices": [{"message": {"content": json.dumps(invalid_document)}}]},
             {"choices": [{"message": {"content": json.dumps(VALID_DOCUMENT)}}]},
@@ -277,8 +309,8 @@ class ScriptGeneratorTests(unittest.TestCase):
 
     def test_retries_with_fallback_model_after_dialogue_length_failure(self):
         invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
-        invalid_document["scenes"][0]["time_range_sec"] = [0, 1]
-        invalid_document["scenes"][0]["voiceover"] = "이 장면에서 읽기에는 너무 긴 광고 대사입니다."
+        invalid_document["scenes"][0]["time_range_sec"] = {"start": 0, "end": 1}
+        invalid_document["scenes"][0]["auditory"]["voiceover"] = "이 장면에서 읽기에는 너무 긴 광고 대사입니다."
         opener = SequentialOpener([
             {"choices": [{"message": {"content": json.dumps(invalid_document)}}]},
             {"choices": [{"message": {"content": json.dumps(VALID_DOCUMENT)}}]},
@@ -297,8 +329,8 @@ class ScriptGeneratorTests(unittest.TestCase):
 
     def test_retries_by_requesting_a_new_complete_script_after_dialogue_failure(self):
         invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
-        invalid_document["scenes"][0]["time_range_sec"] = [0, 1]
-        invalid_document["scenes"][0]["voiceover"] = "이 장면에서 읽기에는 너무 긴 광고 대사입니다."
+        invalid_document["scenes"][0]["time_range_sec"] = {"start": 0, "end": 1}
+        invalid_document["scenes"][0]["auditory"]["voiceover"] = "이 장면에서 읽기에는 너무 긴 광고 대사입니다."
         opener = SequentialOpener([
             {"choices": [{"message": {"content": json.dumps(invalid_document)}}]},
             {"choices": [{"message": {"content": json.dumps(VALID_DOCUMENT)}}]},

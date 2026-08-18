@@ -19,8 +19,26 @@ class VideoApiTests(unittest.TestCase):
         )
         body = VideoGenerationBody(
             script={
-                "meta": {"aspect_ratio": "9:16"},
-                "scenes": [{"time_range_sec": [0, 8], "visual": "상품", "subtitle": "소개"}],
+                "meta": {
+                    "output_format_version": "1.0",
+                    "framework": "Hook-Body-CTA",
+                    "language": "ko",
+                },
+                "summary": {
+                    "main_target": "보호자",
+                    "pain_point": "고민",
+                    "product_usp": "장점",
+                    "key_message": "메시지",
+                    "tone_and_manner": "분위기",
+                },
+                "scenes": [{
+                    "scene_name": "Hook",
+                    "time_range_sec": {"start": 0, "end": 8},
+                    "visual": "상품",
+                    "auditory": {"subtitle": "소개", "voiceover": "소개합니다."},
+                    "notes": "소개",
+                }],
+                "compliance_notes": {"avoid": [], "focus": []},
             },
             image_url="https://example.com/product.jpg",
         )

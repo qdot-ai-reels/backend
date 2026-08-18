@@ -103,7 +103,7 @@ class VideoValidationPipeline:
     def _script_duration(script: Mapping[str, Any]) -> float:
         try:
             scenes = script["scenes"]
-            return float(scenes[-1]["time_range_sec"][1])
+            return float(scenes[-1]["time_range_sec"]["end"])
         except (KeyError, IndexError, TypeError, ValueError) as error:
             raise VideoValidationPipelineError(
                 "스크립트에서 기대 영상 길이를 읽지 못했습니다."

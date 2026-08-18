@@ -117,15 +117,34 @@ Content-Type: application/json
 ```json
 {
   "script": {
-    "meta": {"aspect_ratio": "9:16", "max_duration_sec": 30},
+    "meta": {
+      "output_format_version": "1.0",
+      "framework": "Hook-Body-CTA",
+      "language": "ko"
+    },
+    "summary": {
+      "main_target": "육아에 관심 있는 보호자",
+      "pain_point": "상품 선택이 어려움",
+      "product_usp": "상품의 핵심 장점",
+      "key_message": "상품의 핵심 메시지",
+      "tone_and_manner": "생활형 광고"
+    },
     "scenes": [
       {
-        "time_range_sec": [0, 3],
+        "scene_name": "Hook",
+        "time_range_sec": {"start": 0, "end": 3},
         "visual": "상품을 화면 중앙에 보여준다.",
-        "subtitle": "상품 소개",
-        "voiceover": "상품을 소개합니다."
+        "auditory": {
+          "subtitle": "상품 소개",
+          "voiceover": "상품을 소개합니다."
+        },
+        "notes": "상품을 먼저 보여준다."
       }
-    ]
+    ],
+    "compliance_notes": {
+      "avoid": [],
+      "focus": []
+    }
   },
   "image_url": "https://example.com/product.jpg",
   "resolution": "720p",

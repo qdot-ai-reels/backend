@@ -12,22 +12,30 @@ from app.video_generator import (
 
 SCRIPT = {
     "meta": {
-        "aspect_ratio": "9:16",
-        "max_duration_sec": 30,
-        "channel": "Instagram Reels",
+        "output_format_version": "1.0",
+        "framework": "Hook-Body-CTA",
+        "language": "ko",
     },
-    "summary": "상품을 소개하는 영상",
+    "summary": {
+        "main_target": "보호자",
+        "pain_point": "고민",
+        "product_usp": "장점",
+        "key_message": "메시지",
+        "tone_and_manner": "분위기",
+    },
     "scenes": [
         {
-            "scene_number": 1,
-            "time_range_sec": [0, 8],
+            "scene_name": "Hook",
+            "time_range_sec": {"start": 0, "end": 8},
             "visual": "상품을 화면 중앙에 보여준다.",
-            "subtitle": "상품 소개",
-            "voiceover": "상품을 소개합니다.",
-            "intent": "hook",
+            "auditory": {
+                "subtitle": "상품 소개",
+                "voiceover": "상품을 소개합니다.",
+            },
+            "notes": "상품 소개",
         }
     ],
-    "compliance_notes": [],
+    "compliance_notes": {"avoid": [], "focus": []},
 }
 
 
@@ -122,7 +130,7 @@ class VideoGeneratorTests(unittest.TestCase):
 
     def test_rejects_duration_not_supported_by_selected_model_before_api_call(self):
         script = json.loads(json.dumps(SCRIPT))
-        script["scenes"][0]["time_range_sec"] = [0, 22]
+        script["scenes"][0]["time_range_sec"] = {"start": 0, "end": 22}
         opener = SequentialOpener([])
         client = OpenRouterVideoClient(
             api_key="test-key",
@@ -137,6 +145,24 @@ class VideoGeneratorTests(unittest.TestCase):
 
         self.assertEqual(opener.requests, [])
 
+    def test_rejects_fractional_duration_at_video_provider_boundary(self):
+        script = json.loads(json.dumps(SCRIPT))
+        script["scenes"][0]["time_range_sec"] = {"start": 0, "end": 2.5}
+        opener = SequentialOpener([])
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            opener=opener,
+            supported_durations=(2, 4, 6, 8),
+        )
+
+        with self.assertRaises(VideoGenerationError) as context:
+            client.generate_video(
+                VideoGenerationRequest(script=script, image_url="https://example.com/product.jpg")
+            )
+
+        self.assertIn("양의 정수", str(context.exception))
+        self.assertEqual(opener.requests, [])
+
     def test_rejects_invalid_script_before_submitting_video_job(self):
         opener = SequentialOpener([])
         client = OpenRouterVideoClient(
@@ -148,7 +174,7 @@ class VideoGeneratorTests(unittest.TestCase):
         with self.assertRaises(VideoGenerationError):
             client.generate_video(
                 VideoGenerationRequest(
-                    script={"meta": {"aspect_ratio": "9:16"}, "scenes": []},
+                    script={"meta": {"language": "ko"}, "scenes": []},
                     image_url="https://example.com/product.jpg",
                 )
             )

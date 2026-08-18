@@ -13,15 +13,26 @@ from app.video_validator import VideoMetadata
 
 
 SCRIPT = {
-    "meta": {"aspect_ratio": "9:16", "max_duration_sec": 8},
+    "meta": {
+        "output_format_version": "1.0",
+        "framework": "Hook-Body-CTA",
+        "language": "ko",
+    },
+    "summary": {
+        "main_target": "보호자",
+        "pain_point": "고민",
+        "product_usp": "장점",
+        "key_message": "메시지",
+        "tone_and_manner": "분위기",
+    },
     "scenes": [{
-        "scene_number": 1,
-        "time_range_sec": [0, 8],
+        "scene_name": "Hook",
+        "time_range_sec": {"start": 0, "end": 8},
         "visual": "상품을 보여준다.",
-        "subtitle": "상품 소개",
-        "voiceover": "상품을 소개합니다.",
-        "intent": "hook",
+        "auditory": {"subtitle": "상품 소개", "voiceover": "상품을 소개합니다."},
+        "notes": "상품 소개",
     }],
+    "compliance_notes": {"avoid": [], "focus": []},
 }
 
 

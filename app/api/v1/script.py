@@ -17,7 +17,7 @@ router = APIRouter()
 
 class ScriptGenerationBody(BaseModel):
     product: dict[str, Any] = Field(min_length=1)
-    max_duration_seconds: int = Field(default=30, ge=1, le=120)
+    max_duration_seconds: int = Field(default=30, ge=1, le=30)
     channel: str = "Instagram Reels"
     target_audience: str = "육아에 관심 있는 보호자"
 

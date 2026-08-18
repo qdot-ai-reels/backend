@@ -50,11 +50,14 @@ def build_video_prompt(script: Mapping[str, Any]) -> str:
     scenes = script.get("scenes", [])
     scene_lines = []
     for scene in scenes:
-        start, end = scene["time_range_sec"]
+        time_range = scene["time_range_sec"]
+        start = time_range["start"]
+        end = time_range["end"]
+        auditory = scene.get("auditory") or {}
         scene_lines.append(
             f"{start}-{end}초: 화면={scene.get('visual', '')}; "
-            f"자막={scene.get('subtitle', '')}; "
-            f"내레이션={scene.get('voiceover', '')}"
+            f"자막={auditory.get('subtitle', '')}; "
+            f"내레이션={auditory.get('voiceover', '')}"
         )
 
     return (
@@ -174,7 +177,7 @@ class OpenRouterVideoClient:
         except ScriptValidationError as error:
             raise VideoGenerationError(f"영상 생성용 스크립트가 올바르지 않습니다: {error}") from error
 
-        last_scene_end = validated_script["scenes"][-1]["time_range_sec"][1]
+        last_scene_end = validated_script["scenes"][-1]["time_range_sec"]["end"]
         if not isinstance(last_scene_end, int) or last_scene_end < 1:
             raise VideoGenerationError("스크립트의 마지막 장면 종료 시간은 양의 정수여야 합니다.")
         return last_scene_end
