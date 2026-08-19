@@ -179,6 +179,10 @@ class ScriptGeneratorTests(unittest.TestCase):
         body = json.loads(captured["request"].data)
         self.assertEqual(body["model"], "openai/gpt-oss-20b:free")
         self.assertEqual(body["reasoning"], {"exclude": True})
+        self.assertEqual(body["response_format"]["type"], "json_schema")
+        self.assertEqual(body["response_format"]["json_schema"]["name"], "reels_script")
+        self.assertTrue(body["response_format"]["json_schema"]["strict"])
+        self.assertIn("scenes", body["response_format"]["json_schema"]["schema"]["required"])
         self.assertIn("프랭클린", body["messages"][0]["content"])
         self.assertIn("4.5음절", body["messages"][0]["content"])
 
