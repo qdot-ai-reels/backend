@@ -12,9 +12,9 @@ from urllib.request import Request, urlopen
 
 
 DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "openai/gpt-oss-20b:free"
-DEFAULT_FALLBACK_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
-DEFAULT_SYLLABLES_PER_SECOND = 4.5
+DEFAULT_MODEL = "openai/gpt-4o-mini"
+DEFAULT_FALLBACK_MODEL = "meta-llama/llama-3.3-70b-instruct"
+DEFAULT_SYLLABLES_PER_SECOND = 6.0
 MAX_SCRIPT_DURATION_SECONDS = 30
 
 
@@ -100,6 +100,7 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - 자막은 짧게 작성하고 화면에 넣을 문구와 내레이션을 구분
 - 대사는 장면 시간 안에 읽을 수 있도록 작성하고, 평균 1초당 4.5음절을 기준으로 계산
 - 각 장면의 대사 음절 수가 해당 장면 시간 x 4.5를 넘지 않도록 작성
+- 각 장면의 voiceover(내레이션)는 6~8글자 이내로 아주 짧고 간결한 구호 형태로 작성
 {"- 최종 장면 종료 시간은 다음 중 하나로 작성: " + ", ".join(str(value) for value in request.supported_video_durations) if request.supported_video_durations else ""}
 {"- USP가 비어있거나 null인 경우, 상품 데이터의 다른 정보만을 바탕으로 소비자의 구매를 유도할 수 있는 핵심 소구점(USP)을 도출해 최종 스크립트에 반영하세요." if not has_usp else ""}
 
@@ -385,6 +386,12 @@ class OpenRouterClient:
             with self.opener(http_request, timeout=self.timeout_seconds) as response:
                 response_body = json.loads(response.read().decode("utf-8"))
         except HTTPError as error:
+            # 👇 OpenRouter가 보낸 실제 404 원인 본문을 터미널에 출력
+            err_detail = error.read().decode("utf-8", errors="ignore")
+            print(f"\n[OpenRouter 요청 실패]")
+            print(f"- 요청 URL: {self.api_url}")
+            print(f"- 요청 모델: {model}")
+            print(f"- OpenRouter 실제 에러 응답: {err_detail}\n")
             raise OpenRouterRequestError(
                 f"OpenRouter 요청이 거부되었습니다. HTTP {error.code}",
                 status_code=error.code,

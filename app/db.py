@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
+from dotenv import load_dotenv
+
+# .env 파일 즉시 로드
+load_dotenv()
 
 from sqlalchemy import DateTime, Integer, String, create_engine, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.settings_service import GlobalSettings, SettingsRepository
-
 
 class Base(DeclarativeBase):
     pass
