@@ -18,6 +18,84 @@ DEFAULT_SYLLABLES_PER_SECOND = 4.5
 MAX_SCRIPT_DURATION_SECONDS = 30
 
 
+SCRIPT_RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["meta", "summary", "scenes", "compliance_notes"],
+    "properties": {
+        "meta": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["output_format_version", "framework", "language"],
+            "properties": {
+                "output_format_version": {"type": "string"},
+                "framework": {"type": "string"},
+                "language": {"type": "string"},
+            },
+        },
+        "summary": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "main_target",
+                "pain_point",
+                "product_usp",
+                "key_message",
+                "tone_and_manner",
+            ],
+            "properties": {
+                "main_target": {"type": "string"},
+                "pain_point": {"type": "string"},
+                "product_usp": {"type": "string"},
+                "key_message": {"type": "string"},
+                "tone_and_manner": {"type": "string"},
+            },
+        },
+        "scenes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["scene_name", "time_range_sec", "visual", "auditory", "notes"],
+                "properties": {
+                    "scene_name": {"type": "string"},
+                    "time_range_sec": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["start", "end"],
+                        "properties": {
+                            "start": {"type": "number", "minimum": 0},
+                            "end": {"type": "number", "exclusiveMinimum": 0},
+                        },
+                    },
+                    "visual": {"type": "string"},
+                    "auditory": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["subtitle", "voiceover"],
+                        "properties": {
+                            "subtitle": {"type": "string"},
+                            "voiceover": {"type": ["string", "null"]},
+                        },
+                    },
+                    "notes": {"type": "string"},
+                },
+            },
+        },
+        "compliance_notes": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["avoid", "focus"],
+            "properties": {
+                "avoid": {"type": "array", "items": {"type": "string"}},
+                "focus": {"type": "array", "items": {"type": "string"}},
+            },
+        },
+    },
+}
+
+
 class OpenRouterError(RuntimeError):
     """Base error for OpenRouter request and response failures."""
 
@@ -395,6 +473,14 @@ class OpenRouterClient:
             "temperature": 0.2,
             "max_tokens": 2000,
             "reasoning": {"exclude": True},
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "reels_script",
+                    "strict": True,
+                    "schema": SCRIPT_RESPONSE_SCHEMA,
+                },
+            },
             "messages": [{
                 "role": "user",
                 "content": build_script_message_content(
