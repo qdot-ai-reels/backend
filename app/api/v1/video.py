@@ -4,12 +4,19 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.script_generator import OpenRouterRequestError
+from app.core.s3 import (
+    build_output_object_key,
+    generate_presigned_url,
+    upload_file_to_s3,
+)
 from app.video_generator import (
     OpenRouterVideoClient,
     VideoGenerationError,
     VideoGenerationRequest,
+    VideoGenerationResult,
 )
 from app.video_validation_pipeline import (
+    PublishedVideoArtifact,
     VideoValidationPipeline,
     VideoValidationPipelineError,
 )
@@ -19,6 +26,7 @@ from app.settings_service import ProviderCatalogError, SettingsService
 
 
 router = APIRouter()
+PRESIGNED_URL_EXPIRATION_SECONDS = 900
 
 
 class VideoGenerationBody(BaseModel):
@@ -67,6 +75,7 @@ def generate_video(
             generate_video=lambda pipeline_request, _attempt: client.generate_video(
                 pipeline_request
             ),
+            publish_video=publish_validated_video,
             max_retries=max_retries,
         ).run(request)
     except ProviderCatalogError as error:
@@ -86,9 +95,59 @@ def generate_video(
         "job_id": result.job_id,
         "status": result.status,
         "video_url": result.video_url,
+        "download_url": result.download_url,
+        "s3_object_key": result.s3_object_key,
         "cost": result.total_cost,
         "attempts": result.attempts,
         "validation": result.validation.checks,
+    }
+
+
+def publish_validated_video(
+    video_path: str,
+    generated: VideoGenerationResult,
+) -> PublishedVideoArtifact:
+    """Upload a validated MP4 to outputs/ before its temp file is deleted."""
+    object_key = build_output_object_key(generated.job_id)
+    upload_file_to_s3(video_path, object_key, content_type="video/mp4")
+    return PublishedVideoArtifact(
+        object_key=object_key,
+        playback_url=generate_presigned_url(
+            object_key,
+            expiration=PRESIGNED_URL_EXPIRATION_SECONDS,
+        ),
+        download_url=generate_presigned_url(
+            object_key,
+            expiration=PRESIGNED_URL_EXPIRATION_SECONDS,
+            download=True,
+        ),
+    )
+
+
+@router.get(
+    "/video/{job_id}/url",
+    status_code=status.HTTP_200_OK,
+    summary="S3 최종 영상의 재생 또는 다운로드 URL 재발급",
+)
+def get_video_access_url(job_id: str, download: bool = False) -> dict[str, Any]:
+    try:
+        object_key = build_output_object_key(job_id)
+        url = generate_presigned_url(
+            object_key,
+            expiration=PRESIGNED_URL_EXPIRATION_SECONDS,
+            download=download,
+        )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(error),
+        ) from error
+
+    return {
+        "job_id": job_id,
+        "s3_object_key": object_key,
+        "download": download,
+        "url": url,
     }
 
 

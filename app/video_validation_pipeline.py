@@ -32,11 +32,21 @@ class PipelineResult:
     video_url: str
     validation: ValidationResult
     total_cost: float
+    s3_object_key: str | None = None
+    download_url: str | None = None
+
+
+@dataclass(frozen=True)
+class PublishedVideoArtifact:
+    object_key: str
+    playback_url: str
+    download_url: str
 
 
 VideoGenerator = Callable[[VideoGenerationRequest, int], VideoGenerationResult]
 VideoDownloader = Callable[[str, str], None]
 MetadataReader = Callable[[str | Path], Any]
+VideoPublisher = Callable[[str | Path, VideoGenerationResult], PublishedVideoArtifact]
 
 
 class VideoValidationPipeline:
@@ -45,6 +55,7 @@ class VideoValidationPipeline:
         generate_video: VideoGenerator,
         download_video: VideoDownloader | None = None,
         read_metadata: MetadataReader = read_video_metadata,
+        publish_video: VideoPublisher | None = None,
         max_retries: int = 1,
     ) -> None:
         if max_retries < 0:
@@ -52,6 +63,7 @@ class VideoValidationPipeline:
         self.generate_video = generate_video
         self.download_video = download_video or self._download_video
         self.read_metadata = read_metadata
+        self.publish_video = publish_video
         self.max_retries = max_retries
 
     def run(self, request: VideoGenerationRequest) -> PipelineResult:
@@ -68,26 +80,38 @@ class VideoValidationPipeline:
             last_job_id = generated.job_id
             total_cost += generated.cost or 0.0
 
-            try:
-                with tempfile.TemporaryDirectory(prefix="quedot-video-") as directory:
+            with tempfile.TemporaryDirectory(prefix="quedot-video-") as directory:
+                try:
                     video_path = str(Path(directory) / "generated.mp4")
                     self.download_video(generated.video_url, video_path)
                     metadata = self.read_metadata(video_path)
-            except Exception as error:
-                raise VideoValidationPipelineError(
-                    f"생성된 영상을 다운로드하거나 메타데이터를 읽지 못했습니다: {error}"
-                ) from error
+                except Exception as error:
+                    raise VideoValidationPipelineError(
+                        "생성된 영상을 다운로드하거나 메타데이터를 읽지 못했습니다: "
+                        f"{error}"
+                    ) from error
 
-            last_validation = validate_video(metadata, policy)
-            if last_validation.is_valid:
-                return PipelineResult(
-                    status=PipelineStatus.COMPLETED,
-                    attempts=attempt,
-                    job_id=last_job_id,
-                    video_url=last_url,
-                    validation=last_validation,
-                    total_cost=total_cost,
-                )
+                last_validation = validate_video(metadata, policy)
+                if last_validation.is_valid:
+                    published: PublishedVideoArtifact | None = None
+                    if self.publish_video is not None:
+                        try:
+                            published = self.publish_video(video_path, generated)
+                        except Exception as error:
+                            raise VideoValidationPipelineError(
+                                f"검증된 영상을 S3에 저장하지 못했습니다: {error}"
+                            ) from error
+
+                    return PipelineResult(
+                        status=PipelineStatus.COMPLETED,
+                        attempts=attempt,
+                        job_id=last_job_id,
+                        video_url=(published.playback_url if published else last_url),
+                        validation=last_validation,
+                        total_cost=total_cost,
+                        s3_object_key=(published.object_key if published else None),
+                        download_url=(published.download_url if published else None),
+                    )
 
         assert last_validation is not None
         return PipelineResult(
