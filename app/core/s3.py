@@ -1,13 +1,17 @@
 import logging
 import mimetypes
+import re
+from hashlib import sha256
 from pathlib import Path
-from typing import BinaryIO, Optional, Union
+from typing import Optional, Union
 
 import boto3
 from botocore.exceptions import ClientError
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+OUTPUTS_PREFIX = "outputs"
 
 
 def get_s3_client():
@@ -22,20 +26,47 @@ def get_s3_client():
     )
 
 
-def generate_presigned_url(object_key: str = "dummy_reels.mp4", expiration: int = 900) -> str:
+def build_output_object_key(job_id: str) -> str:
+    """Build a stable, path-safe key for a completed reels video."""
+    if not isinstance(job_id, str) or not job_id.strip():
+        raise ValueError("S3 저장 경로를 만들려면 job_id가 필요합니다.")
+
+    raw_job_id = job_id.strip()
+    safe_job_id = re.sub(r"[^A-Za-z0-9._-]", "_", raw_job_id).strip("._")
+    if not safe_job_id:
+        safe_job_id = "job"
+    if safe_job_id != raw_job_id or len(safe_job_id) > 96:
+        digest = sha256(raw_job_id.encode("utf-8")).hexdigest()[:12]
+        safe_job_id = f"{safe_job_id[:80]}-{digest}"
+
+    return f"{OUTPUTS_PREFIX}/{safe_job_id}/final.mp4"
+
+
+def generate_presigned_url(
+    object_key: str = "dummy_reels.mp4",
+    expiration: int = 900,
+    download: bool = False,
+) -> str:
     """
     S3 객체 접근(조회/재생)을 위한 Presigned GET URL 발급
-    :param object_key: S3 버킷 내 파일 경로 (예: jobs/{job_id}/final.mp4)
+    :param object_key: S3 버킷 내 파일 경로 (예: outputs/{job_id}/final.mp4)
     :param expiration: URL 유효 시간 (초 단위, 기본 15분=900초)
+    :param download: True면 브라우저 다운로드용 Content-Disposition을 포함
     """
     s3_client = get_s3_client()
     try:
+        params = {
+            "Bucket": settings.S3_BUCKET_NAME,
+            "Key": object_key,
+        }
+        if download:
+            params["ResponseContentDisposition"] = (
+                f'attachment; filename="{Path(object_key).name}"'
+            )
+
         url = s3_client.generate_presigned_url(
             "get_object",
-            Params={
-                "Bucket": settings.S3_BUCKET_NAME,
-                "Key": object_key,
-            },
+            Params=params,
             ExpiresIn=expiration,
         )
         return url
@@ -52,7 +83,7 @@ def upload_file_to_s3(
     """
     로컬 디스크의 파일(중간 영상, 오디오, 최종 영상)을 S3에 업로드
     :param file_path: 로컬 파일 경로
-    :param object_key: S3 저장 경로 (예: jobs/{job_id}/final.mp4)
+    :param object_key: S3 저장 경로 (예: outputs/{job_id}/final.mp4)
     :param content_type: MIME 타입 (미지정 시 확장자 기반 자동 추론)
     :return: S3 Object Key
     """
