@@ -75,7 +75,7 @@ SCRIPT_RESPONSE_SCHEMA = {
                         "additionalProperties": False,
                         "required": ["subtitle", "voiceover"],
                         "properties": {
-                            "subtitle": {"type": "string"},
+                            "subtitle": {"type": ["string", "null"]},
                             "voiceover": {"type": ["string", "null"]},
                         },
                     },
@@ -352,7 +352,8 @@ def validate_script_document(
             raise ScriptValidationError(f"{index}번째 scene의 auditory가 필요합니다.")
         if "voiceover" not in auditory:
             raise ScriptValidationError(f"{index}번째 scene의 voiceover가 필요합니다.")
-        if not isinstance(auditory.get("subtitle"), str):
+        subtitle = auditory.get("subtitle")
+        if subtitle is not None and not isinstance(subtitle, str):
             raise ScriptValidationError(f"{index}번째 scene의 subtitle이 필요합니다.")
         if auditory.get("voiceover") is not None and not isinstance(auditory["voiceover"], str):
             raise ScriptValidationError(

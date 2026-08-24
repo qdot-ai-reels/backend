@@ -16,12 +16,14 @@ def build_transcript(script: Mapping[str, Any]) -> list[dict[str, Any]]:
         raise ValueError(f"HyperFrames transcript 입력이 올바르지 않습니다: {error}") from error
 
     transcript: list[dict[str, Any]] = []
-    for index, scene in enumerate(validated_script["scenes"]):
+    for scene in validated_script["scenes"]:
         time_range = scene["time_range_sec"]
         subtitle = scene["auditory"]["subtitle"]
+        if not isinstance(subtitle, str) or not subtitle.strip():
+            continue
         transcript.append(
             {
-                "id": f"w{index}",
+                "id": f"w{len(transcript)}",
                 "text": subtitle,
                 "start": float(time_range["start"]),
                 "end": float(time_range["end"]),
