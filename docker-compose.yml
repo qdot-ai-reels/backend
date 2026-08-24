@@ -25,9 +25,21 @@ services:
       - .env
     volumes:
       - .:/app
+      - ./runtime/hyperframes:/var/lib/quedot/hyperframes
     depends_on:
       db:
         condition: service_healthy
+
+  # HyperFrames is a CLI renderer. Run it with `docker compose run --rm` for
+  # validation or rendering instead of keeping a second web server alive.
+  hyperframes:
+    profiles: ["hyperframes"]
+    build:
+      context: .
+      dockerfile: Dockerfile.hyperframes
+    working_dir: /workspace
+    volumes:
+      - ./runtime/hyperframes:/workspace
 
 volumes:
   postgres_data:
