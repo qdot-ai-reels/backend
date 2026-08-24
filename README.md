@@ -37,6 +37,31 @@ cp .env.example .env
 docker compose -p quedot-reels up -d --build
 ```
 
+### HyperFrames 컨테이너
+
+HyperFrames는 별도 HTTP 서버가 아니라 HTML composition을 MP4로 렌더링하는
+CLI 도구입니다. FastAPI와 같은 컨테이너에 넣지 않고 Node.js 22, Chromium,
+FFmpeg가 포함된 전용 컨테이너에서 실행합니다.
+
+FastAPI와 HyperFrames는 `runtime/hyperframes` 디렉터리를 공유합니다.
+FastAPI가 입력 HTML과 영상을 이 경로에 저장하면 HyperFrames 컨테이너가
+`/workspace`에서 읽고 최종 MP4를 같은 경로에 출력할 수 있습니다.
+
+```bash
+# 이미지 빌드
+docker compose -p quedot-reels --profile hyperframes build hyperframes
+
+# composition 검사
+docker compose -p quedot-reels --profile hyperframes run --rm hyperframes check /workspace --json
+
+# MP4 렌더링
+docker compose -p quedot-reels --profile hyperframes run --rm hyperframes render /workspace \
+  --output /workspace/output.mp4 --quality draft --workers 1
+```
+
+현재 단계에서는 컨테이너와 CLI 실행 환경만 구성합니다. FastAPI가 HyperFrames
+명령을 호출하고 작업 상태를 저장하는 통합 API는 다음 단계에서 연결합니다.
+
 ### 3. 서비스 동작 확인
 컨테이너가 정상 구동되면 아래 주소로 접속하여 결과를 확인합니다.
 * **Health Check:** http://localhost:8000/health

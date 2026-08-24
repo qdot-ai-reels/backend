@@ -13,3 +13,6 @@ venv/
 # IDE
 .vscode/
 .idea/
+
+# HyperFrames inputs and rendered media
+runtime/hyperframes/
