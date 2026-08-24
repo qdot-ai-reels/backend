@@ -39,17 +39,18 @@ def build_composition_html(
     width: int = 1080,
     height: int = 1920,
     fps: int = 30,
+    duration_seconds: float | None = None,
 ) -> str:
-    """Build a basic HyperFrames composition with scene-level captions."""
+    """Build a basic HyperFrames composition with optional scene captions."""
     if not video_filename.strip():
         raise ValueError("HyperFrames composition 영상 파일명이 필요합니다.")
     if width < 1 or height < 1 or fps < 1:
         raise ValueError("HyperFrames composition의 해상도와 fps는 양수여야 합니다.")
-    if not transcript:
-        raise ValueError("HyperFrames composition에는 하나 이상의 transcript가 필요합니다.")
+    if duration_seconds is not None and duration_seconds <= 0:
+        raise ValueError("HyperFrames composition의 영상 길이는 양수여야 합니다.")
 
     cues: list[str] = []
-    duration = 0.0
+    duration = float(duration_seconds or 0)
     for index, cue in enumerate(transcript):
         text = cue.get("text")
         start = cue.get("start")
@@ -62,6 +63,9 @@ def build_composition_html(
         cues.append(
             f'''      <div id="caption-{index}" class="caption clip" data-start="{float(start)}" data-duration="{float(end - start)}" data-track-index="5">{escape(text)}</div>'''
         )
+
+    if duration <= 0:
+        raise ValueError("자막이 없는 HyperFrames composition에는 영상 길이가 필요합니다.")
 
     escaped_video_filename = escape(video_filename, quote=True)
     return f'''<!doctype html>

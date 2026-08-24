@@ -114,6 +114,16 @@ class HyperFramesCaptionTests(unittest.TestCase):
         self.assertIn("첫 장면 &lt;확인&gt;", html)
         self.assertNotIn("첫 장면 <확인>", html)
 
+    def test_build_composition_html_allows_composition_without_captions(self) -> None:
+        html = build_composition_html(
+            video_filename="combined.mp4",
+            transcript=[],
+            duration_seconds=8,
+        )
+
+        self.assertIn('data-duration="8.0"', html)
+        self.assertNotIn('class="caption clip"', html)
+
 
 if __name__ == "__main__":
     unittest.main()
