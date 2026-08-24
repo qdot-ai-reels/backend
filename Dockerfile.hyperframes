@@ -13,7 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN npm install --global hyperframes@0.8.12
 
+COPY hyperframes_runner.mjs /opt/hyperframes_runner.mjs
+
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     HYPERFRAMES_WORKSPACE=/workspace
 
-ENTRYPOINT ["hyperframes"]
+CMD ["node", "/opt/hyperframes_runner.mjs"]
