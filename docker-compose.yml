@@ -26,20 +26,30 @@ services:
     volumes:
       - .:/app
       - ./runtime/hyperframes:/var/lib/quedot/hyperframes
+    environment:
+      HYPERFRAMES_RUNNER_URL: http://hyperframes:8787
     depends_on:
       db:
+        condition: service_healthy
+      hyperframes:
         condition: service_healthy
 
   # HyperFrames is a CLI renderer. Run it with `docker compose run --rm` for
   # validation or rendering instead of keeping a second web server alive.
   hyperframes:
-    profiles: ["hyperframes"]
     build:
       context: .
       dockerfile: Dockerfile.hyperframes
     working_dir: /workspace
+    expose:
+      - "8787"
     volumes:
       - ./runtime/hyperframes:/workspace
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
 volumes:
   postgres_data:

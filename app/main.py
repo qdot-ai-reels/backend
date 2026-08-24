@@ -9,6 +9,7 @@ from app.api.v1.script import router as script_router
 from app.api.v1.video import router as video_router
 from app.api.v1.tts import router as tts_router
 from app.api.v1.settings import router as settings_router
+from app.api.v1.caption import router as caption_router
 from app.db import init_db
 
 
@@ -40,6 +41,7 @@ app.include_router(script_router, prefix="/api/v1/reels", tags=["reels"])
 app.include_router(video_router, prefix="/api/v1/reels", tags=["reels"])
 app.include_router(tts_router, prefix="/api/v1/reels", tags=["reels"])
 app.include_router(settings_router, prefix="/api/v1", tags=["settings"])
+app.include_router(caption_router, prefix="/api/v1/reels", tags=["reels"])
 
 @app.get("/health")
 def health_check():
