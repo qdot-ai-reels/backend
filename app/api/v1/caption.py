@@ -36,6 +36,7 @@ def _workspace_file(filename: str) -> Path:
 
 @router.post("/caption", status_code=status.HTTP_200_OK, summary="영상에 자막 애니메이션 추가")
 def render_captioned_video(body: CaptionRenderBody) -> dict[str, object]:
+    project_dir: Path | None = None
     try:
         transcript = build_transcript(body.script)
         source = _workspace_file(body.video_filename)
@@ -57,8 +58,12 @@ def render_captioned_video(body: CaptionRenderBody) -> dict[str, object]:
         (project_dir / "index.html").write_text(html, encoding="utf-8")
         result = HyperFramesClient(RUNNER_URL).render(job_id)
     except HyperFramesRenderError as exc:
+        if project_dir is not None:
+            shutil.rmtree(project_dir, ignore_errors=True)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except (ValueError, OSError) as exc:
+        if project_dir is not None:
+            shutil.rmtree(project_dir, ignore_errors=True)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return {

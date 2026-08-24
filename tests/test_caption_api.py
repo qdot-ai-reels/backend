@@ -77,6 +77,7 @@ class CaptionApiTests(unittest.TestCase):
                     render_captioned_video(
                         CaptionRenderBody(script=_script(), video_filename="combined.mp4")
                     )
+            self.assertEqual([path.name for path in workspace.iterdir()], ["combined.mp4"])
 
 
 if __name__ == "__main__":

@@ -55,7 +55,13 @@ const server = http.createServer(async (request, response) => {
   }
 
   try {
-    const body = await readBody(request);
+    let body;
+    try {
+      body = await readBody(request);
+    } catch {
+      sendJson(response, 400, { error: "invalid_json" });
+      return;
+    }
     const projectId = String(body.project_id || "");
     const outputFilename = String(body.output_filename || "final.mp4");
     const projectPath = path.resolve(workspace, projectId);

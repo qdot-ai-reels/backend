@@ -64,6 +64,10 @@ docker compose -p quedot-reels run --rm --entrypoint hyperframes hyperframes ren
 FastAPI의 `POST /api/v1/reels/caption`에 스크립트와 공유 작업 디렉터리 내의
 결합 MP4 파일명을 전달하면, runner가 자막이 포함된 최종 MP4를 생성합니다.
 
+후속 결정 필요: 최종 생성 API를 동기 방식으로 유지할지, 작업 ID를 먼저
+반환하고 상태 조회를 제공하는 비동기 방식으로 전환할지는 팀 정책 확정 후
+반영합니다.
+
 ### 3. 서비스 동작 확인
 컨테이너가 정상 구동되면 아래 주소로 접속하여 결과를 확인합니다.
 * **Health Check:** http://localhost:8000/health
