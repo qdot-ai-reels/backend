@@ -3,7 +3,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from app.api.v1.caption import CaptionRenderBody, render_captioned_video
+from app.api.v1.caption import router as caption_router
 from app.hyperframes_client import HyperFramesRenderError
 from app.video_validator import VideoMetadata
 
@@ -62,10 +66,7 @@ class CaptionApiTests(unittest.TestCase):
                         CaptionRenderBody(script=_script(), video_filename="../secret.mp4")
                     )
 
-    @patch(
-        "app.api.v1.caption.HyperFramesClient.render",
-        side_effect=HyperFramesRenderError("runner unavailable"),
-    )
+    @patch("app.api.v1.caption.HyperFramesClient.render", side_effect=HyperFramesRenderError("runner unavailable"))
     @patch("app.api.v1.caption.read_video_metadata")
     def test_returns_bad_gateway_when_runner_fails(self, read_metadata, _render):
         read_metadata.return_value = VideoMetadata(width=1080, height=1920, duration_seconds=8)
@@ -73,10 +74,16 @@ class CaptionApiTests(unittest.TestCase):
             workspace = Path(directory)
             (workspace / "combined.mp4").write_bytes(b"video")
             with patch("app.api.v1.caption.WORKSPACE", workspace):
-                with self.assertRaisesRegex(Exception, "runner unavailable"):
-                    render_captioned_video(
-                        CaptionRenderBody(script=_script(), video_filename="combined.mp4")
+                app = FastAPI()
+                app.include_router(caption_router)
+                with TestClient(app) as client:
+                    response = client.post(
+                        "/caption",
+                        json={"script": _script(), "video_filename": "combined.mp4"},
                     )
+
+            self.assertEqual(response.status_code, 502)
+            self.assertEqual(response.json(), {"detail": "runner unavailable"})
             self.assertEqual([path.name for path in workspace.iterdir()], ["combined.mp4"])
 
 
