@@ -102,8 +102,10 @@ def combine_video_and_audio(
 
     video_duration = read_media_duration(video)
     audio_duration = read_media_duration(audio)
-    if video_duration <= 0 or audio_duration <= 0:
+    if video_duration <= 0:
         raise MediaCombineError("영상 길이가 올바르지 않습니다.")
+    if audio_duration <= 0:
+        raise MediaCombineError("음성 길이가 올바르지 않습니다.")
     if abs(video_duration - audio_duration) > duration_tolerance_seconds:
         raise MediaDurationMismatchError(video_duration, audio_duration)
 
