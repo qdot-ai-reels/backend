@@ -9,6 +9,44 @@ from pathlib import Path
 class MediaCombineError(RuntimeError):
     """Raised when media metadata cannot be read or media cannot be combined."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_type: str = "combine_failed",
+        retryable: bool = False,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+        self.retryable = retryable
+        self.details = details or {}
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "error_type": self.error_type,
+            "retryable": self.retryable,
+            "details": self.details,
+        }
+
+
+class MediaDurationMismatchError(MediaCombineError):
+    """Raised when video and narration durations do not match."""
+
+    def __init__(self, video_seconds: float, audio_seconds: float) -> None:
+        super().__init__(
+            "영상과 TTS의 재생 시간이 일치하지 않습니다.",
+            error_type="duration_mismatch",
+            retryable=False,
+            details={
+                "video_seconds": video_seconds,
+                "audio_seconds": audio_seconds,
+            },
+        )
+
+
+DEFAULT_DURATION_TOLERANCE_SECONDS = 0.1
+
 
 def read_media_duration(path: str | Path) -> float:
     """Read a media file's duration in seconds with FFprobe."""
@@ -49,8 +87,12 @@ def combine_video_and_audio(
     video_path: str | Path,
     audio_path: str | Path,
     output_path: str | Path,
+    duration_tolerance_seconds: float = DEFAULT_DURATION_TOLERANCE_SECONDS,
 ) -> Path:
     """Mux video and narration into an MP4 without re-encoding the video."""
+    if duration_tolerance_seconds < 0:
+        raise ValueError("duration_tolerance_seconds는 0 이상이어야 합니다.")
+
     video = Path(video_path)
     audio = Path(audio_path)
     output = Path(output_path)
@@ -61,6 +103,11 @@ def combine_video_and_audio(
     video_duration = read_media_duration(video)
     if video_duration <= 0:
         raise MediaCombineError("영상 길이가 올바르지 않습니다.")
+    audio_duration = read_media_duration(audio)
+    if audio_duration <= 0:
+        raise MediaCombineError("음성 길이가 올바르지 않습니다.")
+    if abs(video_duration - audio_duration) > duration_tolerance_seconds:
+        raise MediaDurationMismatchError(video_duration, audio_duration)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     command = [
@@ -73,7 +120,7 @@ def combine_video_and_audio(
         "-i",
         str(audio),
         "-filter_complex",
-        "[1:a]apad[audio]",
+        "[1:a]anull[audio]",
         "-map",
         "0:v:0",
         "-map",

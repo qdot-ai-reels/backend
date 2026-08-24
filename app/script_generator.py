@@ -445,9 +445,11 @@ class OpenRouterClient:
         if self.fallback_model and self.fallback_model != self.model:
             models.append(self.fallback_model)
 
-        for attempt in range(min(self.max_attempts, len(models))):
+        for attempt in range(self.max_attempts):
+            # Fallback 모델을 사용한 뒤에도 설정된 재실행 횟수까지 계속 검증한다.
+            model = models[min(attempt, len(models) - 1)]
             try:
-                return self._generate_once(request, models[attempt], attempt)
+                return self._generate_once(request, model, attempt, last_error)
             except ScriptValidationError as error:
                 last_error = error
             except OpenRouterRequestError as error:
@@ -459,15 +461,22 @@ class OpenRouterClient:
         raise last_error
 
     def _generate_once(
-        self, request: ScriptGenerationRequest, model: str, attempt: int
+        self,
+        request: ScriptGenerationRequest,
+        model: str,
+        attempt: int,
+        previous_error: OpenRouterError | None = None,
     ) -> dict[str, Any]:
         retry_instruction = ""
         if attempt > 0:
-            retry_instruction = (
-                "\n이전 모델 응답이 형식 검증에 실패했습니다. "
-                "영상은 9:16 세로형 조건을 따르되 설정값을 meta에 추가하지 말고, "
-                "상품 데이터에 없는 장면이나 효능을 만들지 마세요. JSON만 반환하세요.\n"
-            )
+            retry_instruction = f"""
+
+이전 스크립트 생성 결과가 검증에 실패했습니다.
+실패 사유: {previous_error}
+상품 정보와 Hook-Body-CTA 의도는 유지하되, 실패 사유를 해결한 전체 스크립트를 다시 생성하세요.
+영상은 9:16 세로형 조건을 따르되 설정값을 meta에 추가하지 말고,
+상품 데이터에 없는 장면이나 효능을 만들지 마세요. JSON만 반환하세요.
+"""
 
         payload = {
             "model": model,
