@@ -38,7 +38,7 @@ class MediaCombinerTests(unittest.TestCase):
             self.assertEqual(self._stream_count(output_path, "v:0"), 1)
             self.assertEqual(self._stream_count(output_path, "a:0"), 1)
 
-    def test_fails_when_video_and_audio_durations_do_not_match(self):
+    def test_rejects_video_and_audio_with_different_durations(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
             video_path = directory / "input.mp4"
@@ -60,6 +60,7 @@ class MediaCombinerTests(unittest.TestCase):
             self.assertEqual(context.exception.error_type, "duration_mismatch")
             self.assertFalse(context.exception.retryable)
             self.assertEqual(context.exception.to_dict()["error_type"], "duration_mismatch")
+            self.assertFalse(output_path.exists())
 
     @staticmethod
     def _run_ffmpeg(arguments):

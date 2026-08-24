@@ -51,10 +51,10 @@ def generate_narration(
             detail={
                 "message": str(error),
                 "retryable": error.retryable,
-                "next_step": error.next_step,
                 "scene_number": error.scene_number,
                 "expected_seconds": error.expected_seconds,
                 "actual_seconds": error.actual_seconds,
+                # Script regeneration is intentionally not triggered here.
             },
         ) from error
     except TTSConfigurationError as error:

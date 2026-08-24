@@ -41,15 +41,14 @@ class TTSApiTests(unittest.TestCase):
             },
         )(),
     )
-    def test_returns_script_regeneration_signal_when_scene_audio_is_too_long(self, _client):
+    def test_reports_scene_duration_mismatch_without_regenerating_script(self, _client):
         with self.assertRaises(HTTPException) as context:
             generate_narration(TTSGenerationBody(script={"scenes": []}))
 
         self.assertEqual(context.exception.status_code, 422)
         self.assertEqual(context.exception.detail["retryable"], True)
-        self.assertEqual(context.exception.detail["next_step"], "regenerate_script")
+        self.assertNotIn("next_step", context.exception.detail)
         self.assertEqual(context.exception.detail["scene_number"], 2)
-
 
 if __name__ == "__main__":
     unittest.main()
