@@ -101,9 +101,9 @@ def combine_video_and_audio(
             raise MediaCombineError(f"{label} 파일을 찾을 수 없습니다: {path}")
 
     video_duration = read_media_duration(video)
+    audio_duration = read_media_duration(audio)
     if video_duration <= 0:
         raise MediaCombineError("영상 길이가 올바르지 않습니다.")
-    audio_duration = read_media_duration(audio)
     if audio_duration <= 0:
         raise MediaCombineError("음성 길이가 올바르지 않습니다.")
     if abs(video_duration - audio_duration) > duration_tolerance_seconds:
@@ -131,10 +131,11 @@ def combine_video_and_audio(
         "aac",
         "-b:a",
         "128k",
-        "-t",
-        f"{video_duration:.3f}",
         str(output),
     ]
+
+    # PRD currently requires equal input durations and failure on mismatch.
+    # Padding/truncation can be reconsidered if the product policy changes.
 
     try:
         subprocess.run(

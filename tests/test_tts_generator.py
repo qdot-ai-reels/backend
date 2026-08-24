@@ -8,7 +8,6 @@ from app.tts_generator import (
     CombinedAudioDurationError,
     SceneAudioDurationError,
     SceneNarration,
-    OpenRouterTTSClient,
     OpenRouterTTSSettings,
     build_scene_narrations,
 )
