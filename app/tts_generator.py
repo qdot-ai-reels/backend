@@ -46,6 +46,19 @@ class SceneAudioDurationError(TTSGenerationError):
         )
 
 
+class CombinedAudioDurationError(TTSGenerationError):
+    """Raised when the combined narration does not fit the script timeline."""
+
+    def __init__(self, expected_seconds: float, actual_seconds: float) -> None:
+        self.expected_seconds = expected_seconds
+        self.actual_seconds = actual_seconds
+        super().__init__(
+            "결합된 음성 길이가 스크립트 전체 시간과 일치하지 않습니다. "
+            f"허용 시간: {expected_seconds:.2f}초, "
+            f"실제 음성: {actual_seconds:.2f}초"
+        )
+
+
 @dataclass(frozen=True)
 class SceneNarration:
     scene_number: int
@@ -188,6 +201,18 @@ class OpenRouterTTSClient:
 
         if not combined_audio:
             raise TTSGenerationError("음성 결합 결과가 비어 있습니다.")
+        expected_total_seconds = max(
+            narration.end_seconds for narration in scene_narrations
+        )
+        actual_total_seconds = self.duration_reader(combined_audio)
+        if (
+            abs(actual_total_seconds - expected_total_seconds)
+            > self.duration_tolerance_seconds
+        ):
+            raise CombinedAudioDurationError(
+                expected_seconds=expected_total_seconds,
+                actual_seconds=actual_total_seconds,
+            )
         return combined_audio
 
     def _create_openrouter_synthesizer(self) -> Callable[[str], bytes]:

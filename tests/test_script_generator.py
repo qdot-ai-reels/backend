@@ -382,7 +382,57 @@ class ScriptGeneratorTests(unittest.TestCase):
         second_prompt = json.loads(opener.requests[1].data)["messages"][0]["content"]
         self.assertIn('"scenes"', first_prompt)
         self.assertIn('"scenes"', second_prompt)
-        self.assertIn("이전 모델 응답이 형식 검증에 실패했습니다", second_prompt)
+        self.assertIn("이전 스크립트 생성 결과가 검증에 실패했습니다", second_prompt)
+        self.assertIn("1번째 scene의 대사가 너무 깁니다", second_prompt)
+        self.assertIn("전체 스크립트를 다시 생성", second_prompt)
+
+    def test_honors_configured_attempts_even_after_fallback_model_is_used(self):
+        invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
+        del invalid_document["meta"]["framework"]
+        opener = SequentialOpener([
+            {"choices": [{"message": {"content": json.dumps(invalid_document)}}]},
+            {"choices": [{"message": {"content": json.dumps(invalid_document)}}]},
+            {"choices": [{"message": {"content": json.dumps(VALID_DOCUMENT)}}]},
+        ])
+        client = OpenRouterClient(
+            api_key="test-key",
+            model="openrouter/free",
+            fallback_model="fallback/model",
+            max_attempts=3,
+            opener=opener,
+        )
+
+        result = client.generate_script(ScriptGenerationRequest(product=PRODUCT))
+
+        self.assertEqual(result, VALID_DOCUMENT)
+        self.assertEqual(len(opener.requests), 3)
+        self.assertEqual(
+            [json.loads(request.data)["model"] for request in opener.requests],
+            ["openrouter/free", "fallback/model", "fallback/model"],
+        )
+
+    def test_retry_prompt_contains_validation_reason_and_requests_a_complete_script(self):
+        invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
+        invalid_document["scenes"][0]["time_range_sec"] = {"start": 0, "end": 1}
+        invalid_document["scenes"][0]["auditory"]["voiceover"] = (
+            "이 장면에서 읽기에는 너무 긴 광고 대사입니다."
+        )
+        opener = SequentialOpener([
+            {"choices": [{"message": {"content": json.dumps(invalid_document)}}]},
+            {"choices": [{"message": {"content": json.dumps(VALID_DOCUMENT)}}]},
+        ])
+        client = OpenRouterClient(
+            api_key="test-key",
+            model="openrouter/free",
+            fallback_model="fallback/model",
+            opener=opener,
+        )
+
+        client.generate_script(ScriptGenerationRequest(product=PRODUCT))
+
+        retry_prompt = json.loads(opener.requests[1].data)["messages"][0]["content"]
+        self.assertIn("1번째 scene의 대사가 너무 깁니다", retry_prompt)
+        self.assertIn("전체 스크립트를 다시 생성", retry_prompt)
 
 
 if __name__ == "__main__":

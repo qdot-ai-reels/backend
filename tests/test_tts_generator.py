@@ -5,6 +5,7 @@ from unittest.mock import patch
 from app.tts_generator import (
     OpenRouterTTSClient,
     NarrationValidationError,
+    CombinedAudioDurationError,
     SceneAudioDurationError,
     SceneNarration,
     OpenRouterTTSClient,
@@ -122,10 +123,11 @@ class TTSGeneratorTests(unittest.TestCase):
             combine_calls.append(scene_audio)
             return b"combined-mp3-bytes"
 
+        durations = iter([1.5, 1.5, 1.5, 8.0])
         client = OpenRouterTTSClient(
             synthesizer=fake_synthesizer,
             combiner=fake_combiner,
-            duration_reader=lambda _audio: 1.5,
+            duration_reader=lambda _audio: next(durations),
         )
 
         result = client.generate_narration(SCRIPT)
@@ -152,10 +154,11 @@ class TTSGeneratorTests(unittest.TestCase):
             ]
         }
 
+        durations = iter([1.0, 6.0])
         client = OpenRouterTTSClient(
             synthesizer=lambda text: synth_calls.append(text) or b"audio",
             combiner=lambda scenes: combine_calls.append(scenes) or b"combined",
-            duration_reader=lambda _audio: 1.0,
+            duration_reader=lambda _audio: next(durations),
         )
 
         self.assertEqual(client.generate_narration(script), b"combined")
@@ -173,10 +176,11 @@ class TTSGeneratorTests(unittest.TestCase):
             ]
         }
 
+        durations = iter([1.0, 1.0, 11.3])
         client = OpenRouterTTSClient(
             synthesizer=lambda text: synth_calls.append(text) or b"audio",
             combiner=lambda _scenes: b"combined",
-            duration_reader=lambda _audio: 1.0,
+            duration_reader=lambda _audio: next(durations),
         )
 
         self.assertEqual(client.generate_narration(script), b"combined")
@@ -198,10 +202,11 @@ class TTSGeneratorTests(unittest.TestCase):
 
     def test_does_not_duplicate_script_dialogue_validation_in_tts(self):
         calls = []
+        durations = iter([0.5, 1.0])
         client = OpenRouterTTSClient(
             synthesizer=lambda text: calls.append(text) or b"audio",
             combiner=lambda _scenes: b"combined",
-            duration_reader=lambda _audio: 0.5,
+            duration_reader=lambda _audio: next(durations),
         )
         long_script = {
             "scenes": [
@@ -214,6 +219,20 @@ class TTSGeneratorTests(unittest.TestCase):
 
         self.assertEqual(client.generate_narration(long_script), b"combined")
         self.assertEqual(calls, [long_script["scenes"][0]["auditory"]["voiceover"]])
+
+    def test_rejects_combined_audio_when_total_duration_does_not_match_script(self):
+        durations = iter([1.0, 1.0, 1.0, 8.2])
+        client = OpenRouterTTSClient(
+            synthesizer=lambda _text: b"scene-audio",
+            combiner=lambda _scenes: b"combined-audio",
+            duration_reader=lambda _audio: next(durations),
+        )
+
+        with self.assertRaises(CombinedAudioDurationError) as context:
+            client.generate_narration(SCRIPT)
+
+        self.assertEqual(context.exception.expected_seconds, 8.0)
+        self.assertEqual(context.exception.actual_seconds, 8.2)
 
 if __name__ == "__main__":
     unittest.main()

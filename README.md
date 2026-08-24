@@ -34,7 +34,7 @@ cp .env.example .env
 
 ### 2. Docker 컨테이너 실행
 ```bash
-docker compose up -d --build
+docker compose -p quedot-reels up -d --build
 ```
 
 ### 3. 서비스 동작 확인

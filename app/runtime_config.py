@@ -22,8 +22,8 @@ def build_script_client(service: SettingsService | None = None) -> OpenRouterCli
     persisted = service.get_runtime_settings()
     return OpenRouterClient(
         api_key=(
-            os.getenv("OPENROUTER_SCRIPT_API_KEY")
-            or service.get_script_api_key()
+            service.get_script_api_key()
+            or os.getenv("OPENROUTER_SCRIPT_API_KEY")
             or environment_client.api_key
         ),
         model=persisted.openrouter_script_model or environment_client.model,
@@ -36,8 +36,8 @@ def build_script_client(service: SettingsService | None = None) -> OpenRouterCli
 def get_video_model_capabilities(service: SettingsService | None = None) -> VideoModelCapabilities:
     environment_client = OpenRouterVideoClient.from_env()
     api_key = os.getenv("OPENROUTER_VIDEO_API_KEY", "")
-    if service is not None and not api_key:
-        api_key = service.get_video_api_key() or ""
+    if service is not None:
+        api_key = service.get_video_api_key() or api_key
     selected_model = environment_client.model
     if service is not None:
         persisted = service.get_runtime_settings()
@@ -65,8 +65,7 @@ def build_video_client(
     supported_resolutions = environment_client.supported_resolutions
     if service is not None:
         persisted = service.get_runtime_settings()
-        if not api_key:
-            api_key = service.get_video_api_key() or ""
+        api_key = service.get_video_api_key() or api_key
         model = persisted.openrouter_video_model or model
         if capabilities is None:
             supported_resolutions = (persisted.video_max_resolution,)

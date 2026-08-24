@@ -184,7 +184,7 @@ POST /api/v1/reels/generate
 ### 현재 준비되어 있는 것
 
 - `docker-compose.yml`에 PostgreSQL 16 컨테이너가 정의되어 있습니다.
-- Docker 실행 시 `postgres_db` 컨테이너가 시작됩니다.
+- Docker Compose 프로젝트 이름을 `quedot-reels`로 실행하면 `quedot-reels-db-1` 컨테이너가 시작됩니다.
 - `requirements.txt`에 `SQLAlchemy`, `psycopg2-binary`가 포함되어 있습니다.
 - PostgreSQL healthcheck로 데이터베이스 프로세스가 살아 있는지는 확인합니다.
 
