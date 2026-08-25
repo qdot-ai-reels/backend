@@ -11,3 +11,4 @@ google-cloud-texttospeech
 cryptography
 httpx2
 httpx
+python-multipart
