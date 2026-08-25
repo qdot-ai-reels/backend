@@ -5,13 +5,17 @@ from __future__ import annotations
 from html import escape
 from typing import Any, Mapping
 
-from app.script_generator import ScriptValidationError, validate_script_document
+from app.script_generator import (
+    ScriptValidationError,
+    normalize_script_subtitles,
+    validate_script_document,
+)
 
 
 def build_transcript(script: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Build scene-level transcript cues from the validated script document."""
     try:
-        validated_script = validate_script_document(script)
+        validated_script = validate_script_document(normalize_script_subtitles(script))
     except ScriptValidationError as error:
         raise ValueError(f"HyperFrames transcript 입력이 올바르지 않습니다: {error}") from error
 

@@ -80,7 +80,8 @@ class OpenRouterVideoClient:
         api_url: str = DEFAULT_VIDEO_API_URL,
         timeout_seconds: int = 120,
         poll_interval_seconds: float = 5.0,
-        max_poll_attempts: int = 24,
+        # Video generation can take several minutes even after the job is accepted.
+        max_poll_attempts: int = 60,
         supported_durations: tuple[int, ...] = DEFAULT_SUPPORTED_DURATIONS,
         supported_aspect_ratios: tuple[str, ...] = ("9:16",),
         supported_resolutions: tuple[str, ...] = ("1080p",),

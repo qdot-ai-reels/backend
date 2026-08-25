@@ -1,14 +1,14 @@
+import os
+import re
+import shutil
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.script_generator import OpenRouterRequestError
-from app.core.s3 import (
-    build_output_object_key,
-    generate_presigned_url,
-    upload_file_to_s3,
-)
 from app.video_generator import (
     OpenRouterVideoClient,
     VideoGenerationError,
@@ -26,7 +26,7 @@ from app.settings_service import ProviderCatalogError, SettingsService
 
 
 router = APIRouter()
-PRESIGNED_URL_EXPIRATION_SECONDS = 900
+LOCAL_VIDEO_OUTPUT_DIR = Path(os.getenv("VIDEO_OUTPUT_DIR", "runtime/videos"))
 
 
 class VideoGenerationBody(BaseModel):
@@ -96,7 +96,7 @@ def generate_video(
         "status": result.status,
         "video_url": result.video_url,
         "download_url": result.download_url,
-        "s3_object_key": result.s3_object_key,
+        "storage_path": result.storage_path,
         "cost": result.total_cost,
         "attempts": result.attempts,
         "validation": result.validation.checks,
@@ -107,48 +107,54 @@ def publish_validated_video(
     video_path: str,
     generated: VideoGenerationResult,
 ) -> PublishedVideoArtifact:
-    """Upload a validated MP4 to outputs/ before its temp file is deleted."""
-    object_key = build_output_object_key(generated.job_id)
-    upload_file_to_s3(video_path, object_key, content_type="video/mp4")
+    """Keep a validated MP4 locally for the current stage-by-stage testing."""
+    safe_job_id = re.sub(r"[^A-Za-z0-9._-]", "_", generated.job_id).strip("._") or "job"
+    output_path = LOCAL_VIDEO_OUTPUT_DIR / safe_job_id / "final.mp4"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(video_path, output_path)
+    file_url = f"/api/v1/reels/video/{safe_job_id}/file"
     return PublishedVideoArtifact(
-        object_key=object_key,
-        playback_url=generate_presigned_url(
-            object_key,
-            expiration=PRESIGNED_URL_EXPIRATION_SECONDS,
-        ),
-        download_url=generate_presigned_url(
-            object_key,
-            expiration=PRESIGNED_URL_EXPIRATION_SECONDS,
-            download=True,
-        ),
+        storage_path=str(output_path),
+        playback_url=file_url,
+        download_url=f"{file_url}?download=true",
     )
 
 
 @router.get(
     "/video/{job_id}/url",
     status_code=status.HTTP_200_OK,
-    summary="S3 최종 영상의 재생 또는 다운로드 URL 재발급",
+    summary="로컬 저장 영상의 재생 또는 다운로드 URL 조회",
 )
 def get_video_access_url(job_id: str, download: bool = False) -> dict[str, Any]:
-    try:
-        object_key = build_output_object_key(job_id)
-        url = generate_presigned_url(
-            object_key,
-            expiration=PRESIGNED_URL_EXPIRATION_SECONDS,
-            download=download,
-        )
-    except ValueError as error:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(error),
-        ) from error
+    safe_job_id = re.sub(r"[^A-Za-z0-9._-]", "_", job_id).strip("._") or "job"
+    url = f"/api/v1/reels/video/{safe_job_id}/file"
+    if download:
+        url += "?download=true"
 
     return {
-        "job_id": job_id,
-        "s3_object_key": object_key,
+        "job_id": safe_job_id,
+        "storage": "local",
+        "storage_path": str(LOCAL_VIDEO_OUTPUT_DIR / safe_job_id / "final.mp4"),
         "download": download,
         "url": url,
     }
+
+
+@router.get(
+    "/video/{job_id}/file",
+    status_code=status.HTTP_200_OK,
+    summary="로컬에 저장된 검증 완료 영상 조회 또는 다운로드",
+)
+def get_video_file(job_id: str, download: bool = False) -> FileResponse:
+    safe_job_id = re.sub(r"[^A-Za-z0-9._-]", "_", job_id).strip("._") or "job"
+    path = LOCAL_VIDEO_OUTPUT_DIR / safe_job_id / "final.mp4"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="저장된 영상을 찾을 수 없습니다.")
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        filename="final.mp4" if download else None,
+    )
 
 
 def select_video_resolution(

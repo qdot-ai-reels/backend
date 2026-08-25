@@ -6,6 +6,7 @@ import json
 import os
 from dataclasses import dataclass
 from json import JSONDecodeError
+from copy import deepcopy
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -373,6 +374,17 @@ def count_speech_syllables(text: str) -> int:
     return sum(1 for character in text if character.isalnum())
 
 
+def normalize_script_subtitles(document: Mapping[str, Any]) -> dict[str, Any]:
+    """Convert escaped line breaks in generated subtitles into actual line breaks."""
+    normalized = deepcopy(document)
+    for scene in normalized.get("scenes") or []:
+        auditory = scene.get("auditory") or {}
+        subtitle = auditory.get("subtitle")
+        if isinstance(subtitle, str):
+            auditory["subtitle"] = subtitle.replace("\\r\\n", "\n").replace("\\n", "\n")
+    return normalized
+
+
 def validate_dialogue_lengths(
     document: Mapping[str, Any],
     syllables_per_second: float = DEFAULT_SYLLABLES_PER_SECOND,
@@ -528,6 +540,6 @@ class OpenRouterClient:
             raise ScriptValidationError("OpenRouter 응답에 choices.message.content가 없습니다.") from error
 
         return validate_script_document(
-            extract_script_json(content),
+            normalize_script_subtitles(extract_script_json(content)),
             max_duration_seconds=request.max_duration_seconds,
         )

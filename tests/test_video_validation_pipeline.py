@@ -73,9 +73,9 @@ class VideoValidationPipelineTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), b"video")
             published_paths.append((path.name, generated.job_id))
             return PublishedVideoArtifact(
-                object_key="outputs/job-1/final.mp4",
-                playback_url="https://s3.example.com/play",
-                download_url="https://s3.example.com/download",
+                storage_path="runtime/videos/job-1/final.mp4",
+                playback_url="/api/v1/reels/video/job-1/file",
+                download_url="/api/v1/reels/video/job-1/file?download=true",
             )
 
         pipeline = VideoValidationPipeline(
@@ -91,9 +91,9 @@ class VideoValidationPipelineTests(unittest.TestCase):
 
         result = pipeline.run(VideoGenerationRequest(SCRIPT, "https://example.com/product.jpg"))
 
-        self.assertEqual(result.video_url, "https://s3.example.com/play")
-        self.assertEqual(result.download_url, "https://s3.example.com/download")
-        self.assertEqual(result.s3_object_key, "outputs/job-1/final.mp4")
+        self.assertEqual(result.video_url, "/api/v1/reels/video/job-1/file")
+        self.assertEqual(result.download_url, "/api/v1/reels/video/job-1/file?download=true")
+        self.assertEqual(result.storage_path, "runtime/videos/job-1/final.mp4")
         self.assertEqual(published_paths, [("generated.mp4", "job-1")])
 
     def test_regenerates_when_downloaded_video_fails_validation(self):
@@ -119,7 +119,7 @@ class VideoValidationPipelineTests(unittest.TestCase):
         self.assertEqual(result.video_url, "https://example.com/video-2.mp4")
         self.assertEqual(attempts, [1, 2])
 
-    def test_fails_completed_flow_when_s3_publish_fails(self):
+    def test_fails_completed_flow_when_local_publish_fails(self):
         pipeline = VideoValidationPipeline(
             generate_video=lambda _request, _attempt: VideoGenerationResult(
                 job_id="job-1",
@@ -129,14 +129,14 @@ class VideoValidationPipelineTests(unittest.TestCase):
             download_video=lambda _url, destination: Path(destination).write_bytes(b"video"),
             read_metadata=lambda _path: VideoMetadata(720, 1280, 8.0),
             publish_video=lambda *_args: (_ for _ in ()).throw(
-                ValueError("mock S3 failure")
+                ValueError("mock local storage failure")
             ),
         )
 
         with self.assertRaises(VideoValidationPipelineError) as context:
             pipeline.run(VideoGenerationRequest(SCRIPT, "https://example.com/product.jpg"))
 
-        self.assertIn("S3", str(context.exception))
+        self.assertIn("저장", str(context.exception))
 
     def test_does_not_retry_after_validation_failures_are_exhausted(self):
         published = []
