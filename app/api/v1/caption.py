@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.hyperframes_caption import build_composition_html, build_transcript
@@ -72,3 +73,24 @@ def render_captioned_video(body: CaptionRenderBody) -> dict[str, object]:
         "output_filename": f"{job_id}/final.mp4",
         "subtitle_count": len(transcript),
     }
+
+
+@router.get(
+    "/caption/{job_id}/file",
+    status_code=status.HTTP_200_OK,
+    summary="HyperFrames 결과 영상 조회 또는 다운로드",
+)
+def get_captioned_video(job_id: str, download: bool = False) -> FileResponse:
+    try:
+        output = _workspace_file(f"{job_id}/final.mp4")
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    if not output.is_file():
+        raise HTTPException(status_code=404, detail="HyperFrames 결과 영상을 찾을 수 없습니다.")
+
+    return FileResponse(
+        output,
+        media_type="video/mp4",
+        filename="final.mp4" if download else None,
+    )
