@@ -35,20 +35,20 @@ def _workspace_file(filename: str) -> Path:
     return candidate
 
 
-@router.post("/caption", status_code=status.HTTP_200_OK, summary="영상에 자막 애니메이션 추가")
-def render_captioned_video(body: CaptionRenderBody) -> dict[str, object]:
+def render_captioned_video_file(script: dict[str, Any], source: str | Path) -> dict[str, object]:
+    """Render a local combined MP4 and return its local output metadata."""
     project_dir: Path | None = None
     try:
-        transcript = build_transcript(body.script)
-        source = _workspace_file(body.video_filename)
-        if not source.is_file():
-            raise ValueError(f"결합된 영상 파일을 찾을 수 없습니다: {body.video_filename}")
+        transcript = build_transcript(script)
+        source_path = Path(source)
+        if not source_path.is_file():
+            raise ValueError(f"결합된 영상 파일을 찾을 수 없습니다: {source_path}")
 
-        metadata = read_video_metadata(source)
+        metadata = read_video_metadata(source_path)
         job_id = uuid.uuid4().hex
         project_dir = WORKSPACE / job_id
         project_dir.mkdir(parents=True, exist_ok=False)
-        shutil.copy2(source, project_dir / "combined.mp4")
+        shutil.copy2(source_path, project_dir / "combined.mp4")
         html = build_composition_html(
             "combined.mp4",
             transcript,
@@ -58,20 +58,39 @@ def render_captioned_video(body: CaptionRenderBody) -> dict[str, object]:
         )
         (project_dir / "index.html").write_text(html, encoding="utf-8")
         result = HyperFramesClient(RUNNER_URL).render(job_id)
-    except HyperFramesRenderError as exc:
+    except HyperFramesRenderError:
         if project_dir is not None:
             shutil.rmtree(project_dir, ignore_errors=True)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except (ValueError, OSError) as exc:
+        raise
+    except (ValueError, OSError):
         if project_dir is not None:
             shutil.rmtree(project_dir, ignore_errors=True)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise
 
+    output_path = _workspace_file(f"{job_id}/final.mp4")
     return {
         "job_id": job_id,
         "status": result["status"],
-        "output_filename": f"{job_id}/final.mp4",
+        "output_path": str(output_path),
         "subtitle_count": len(transcript),
+    }
+
+
+@router.post("/caption", status_code=status.HTTP_200_OK, summary="영상에 자막 애니메이션 추가")
+def render_captioned_video(body: CaptionRenderBody) -> dict[str, object]:
+    try:
+        source = _workspace_file(body.video_filename)
+        result = render_captioned_video_file(body.script, source)
+    except HyperFramesRenderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return {
+        "job_id": result["job_id"],
+        "status": result["status"],
+        "output_filename": f"{result['job_id']}/final.mp4",
+        "subtitle_count": result["subtitle_count"],
     }
 
 

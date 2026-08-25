@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Integer, String, create_engine, inspect, select, text
+from sqlalchemy import DateTime, Float, Integer, String, Text, create_engine, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.settings_service import GlobalSettings, SettingsRepository
@@ -32,6 +32,30 @@ class GlobalSettingsRow(Base):
     video_generation_retries: Mapped[int] = mapped_column(Integer, default=1)
     media_combine_retries: Mapped[int] = mapped_column(Integer, default=3)
     mute_original_audio: Mapped[bool] = mapped_column(default=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class GenerationJobRow(Base):
+    __tablename__ = "generation_jobs"
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), default="PENDING")
+    input_type: Mapped[str] = mapped_column(String(32))
+    product_json: Mapped[str | None] = mapped_column(Text)
+    script_json: Mapped[str | None] = mapped_column(Text)
+    image_url: Mapped[str | None] = mapped_column(String(2048))
+    video_job_id: Mapped[str | None] = mapped_column(String(128))
+    caption_job_id: Mapped[str | None] = mapped_column(String(128))
+    output_path: Mapped[str | None] = mapped_column(String(2048))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    cost: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
