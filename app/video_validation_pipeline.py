@@ -32,13 +32,13 @@ class PipelineResult:
     video_url: str
     validation: ValidationResult
     total_cost: float
-    s3_object_key: str | None = None
+    storage_path: str | None = None
     download_url: str | None = None
 
 
 @dataclass(frozen=True)
 class PublishedVideoArtifact:
-    object_key: str
+    storage_path: str
     playback_url: str
     download_url: str
 
@@ -99,7 +99,7 @@ class VideoValidationPipeline:
                             published = self.publish_video(video_path, generated)
                         except Exception as error:
                             raise VideoValidationPipelineError(
-                                f"검증된 영상을 S3에 저장하지 못했습니다: {error}"
+                                f"검증된 영상을 저장하지 못했습니다: {error}"
                             ) from error
 
                     return PipelineResult(
@@ -109,7 +109,7 @@ class VideoValidationPipeline:
                         video_url=(published.playback_url if published else last_url),
                         validation=last_validation,
                         total_cost=total_cost,
-                        s3_object_key=(published.object_key if published else None),
+                        storage_path=(published.storage_path if published else None),
                         download_url=(published.download_url if published else None),
                     )
 

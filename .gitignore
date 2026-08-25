@@ -16,3 +16,4 @@ venv/
 
 # HyperFrames inputs and rendered media
 runtime/hyperframes/
+runtime/videos/

@@ -94,6 +94,40 @@ class HyperFramesCaptionTests(unittest.TestCase):
             [{"id": "w0", "text": "지금 확인", "start": 5.0, "end": 8.0}],
         )
 
+    def test_build_transcript_normalizes_escaped_line_breaks(self) -> None:
+        script = {
+            "meta": {
+                "output_format_version": "1.0",
+                "framework": "Hook-Body-CTA",
+                "language": "ko",
+            },
+            "summary": {
+                "main_target": "보호자",
+                "pain_point": "제품 선택이 어려움",
+                "product_usp": "핵심 장점",
+                "key_message": "상품 소개",
+                "tone_and_manner": "생활형 광고",
+            },
+            "scenes": [
+                {
+                    "scene_name": "CTA",
+                    "time_range_sec": {"start": 0, "end": 3},
+                    "visual": "상품을 강조한다.",
+                    "auditory": {
+                        "subtitle": "첫 줄\\n둘째 줄",
+                        "voiceover": None,
+                    },
+                    "notes": "구매 유도",
+                }
+            ],
+            "compliance_notes": {"avoid": [], "focus": []},
+        }
+
+        self.assertEqual(
+            build_transcript(script)[0]["text"],
+            "첫 줄\n둘째 줄",
+        )
+
     def test_build_composition_html_uses_transcript_cue_boundaries(self) -> None:
         html = build_composition_html(
             video_filename="combined.mp4",
