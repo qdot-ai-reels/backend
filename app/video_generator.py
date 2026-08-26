@@ -20,8 +20,8 @@ from app.script_generator import (
 
 
 DEFAULT_VIDEO_API_URL = "https://openrouter.ai/api/v1/videos"
-DEFAULT_VIDEO_MODEL = "google/veo-3.1-lite"
-DEFAULT_SUPPORTED_DURATIONS = (4, 6, 8)
+DEFAULT_VIDEO_MODEL = "bytedance/seedance-2.0-mini"
+DEFAULT_SUPPORTED_DURATIONS = tuple(range(4, 16))
 
 
 class VideoGenerationError(RuntimeError):
@@ -32,7 +32,7 @@ class VideoGenerationError(RuntimeError):
 class VideoGenerationRequest:
     script: Mapping[str, Any]
     image_url: str
-    resolution: str = "1080p"
+    resolution: str = "720p"
     aspect_ratio: str = "9:16"
     generate_audio: bool = False
 
@@ -43,6 +43,33 @@ class VideoGenerationResult:
     status: str
     video_url: str
     cost: float | None = None
+
+
+def _video_failure_message(result: Mapping[str, Any], status: str) -> str:
+    """Return a safe message for provider failures with varying JSON shapes."""
+    provider_error = result.get("error")
+    if isinstance(provider_error, Mapping):
+        detail = provider_error.get("message") or provider_error.get("detail")
+    elif provider_error is not None:
+        detail = provider_error
+    else:
+        detail = result.get("message")
+
+    message = str(detail).strip() if detail is not None else ""
+    return message[:500] or status
+
+
+def _video_image_payload(model: str, image_url: str) -> dict[str, list[dict[str, Any]]]:
+    """Build the image input shape supported by the selected video model."""
+    image = {
+        "type": "image_url",
+        "image_url": {"url": image_url},
+    }
+    if model.startswith("google/veo-"):
+        return {
+            "frame_images": [{**image, "frame_type": "first_frame"}],
+        }
+    return {"input_references": [image]}
 
 
 def build_video_prompt(script: Mapping[str, Any]) -> str:
@@ -84,7 +111,7 @@ class OpenRouterVideoClient:
         max_poll_attempts: int = 60,
         supported_durations: tuple[int, ...] = DEFAULT_SUPPORTED_DURATIONS,
         supported_aspect_ratios: tuple[str, ...] = ("9:16",),
-        supported_resolutions: tuple[str, ...] = ("1080p",),
+        supported_resolutions: tuple[str, ...] = ("480p", "720p"),
         opener: Callable[..., Any] = urlopen,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -110,7 +137,10 @@ class OpenRouterVideoClient:
             api_url=os.getenv("OPENROUTER_VIDEO_API_URL") or DEFAULT_VIDEO_API_URL,
             supported_durations=tuple(
                 int(value)
-                for value in (os.getenv("OPENROUTER_VIDEO_SUPPORTED_DURATIONS") or "4,6,8").split(",")
+                for value in (
+                    os.getenv("OPENROUTER_VIDEO_SUPPORTED_DURATIONS")
+                    or ",".join(str(value) for value in DEFAULT_SUPPORTED_DURATIONS)
+                ).split(",")
             ),
         )
 
@@ -139,22 +169,19 @@ class OpenRouterVideoClient:
                 f"지원 길이: {supported}초"
             )
 
+        submit_payload = {
+            "model": self.model,
+            "prompt": build_video_prompt(request.script),
+            "duration": duration_seconds,
+            "resolution": request.resolution,
+            "aspect_ratio": request.aspect_ratio,
+            "generate_audio": request.generate_audio,
+        }
+        submit_payload.update(_video_image_payload(self.model, request.image_url))
         submit_response = self._request_json(
             method="POST",
             url=self.api_url,
-            payload={
-                "model": self.model,
-                "prompt": build_video_prompt(request.script),
-                "duration": duration_seconds,
-                "resolution": request.resolution,
-                "aspect_ratio": request.aspect_ratio,
-                "generate_audio": request.generate_audio,
-                "frame_images": [{
-                    "type": "image_url",
-                    "image_url": {"url": request.image_url},
-                    "frame_type": "first_frame",
-                }],
-            },
+            payload=submit_payload,
         )
         job_id = submit_response.get("id")
         polling_url = submit_response.get("polling_url")
@@ -165,7 +192,8 @@ class OpenRouterVideoClient:
             if attempt > 0:
                 self.sleeper(self.poll_interval_seconds)
             result = self._request_json(method="GET", url=polling_url)
-            status = result.get("status")
+            raw_status = result.get("status")
+            status = raw_status.lower() if isinstance(raw_status, str) else raw_status
             if status == "completed":
                 urls = result.get("unsigned_urls") or []
                 if not urls:
@@ -178,9 +206,9 @@ class OpenRouterVideoClient:
                     cost=usage.get("cost"),
                 )
             if status in {"failed", "error", "cancelled"}:
-                error = result.get("error") or {}
                 raise VideoGenerationError(
-                    f"영상 생성에 실패했습니다: {error.get('message', status)}"
+                    f"영상 생성에 실패했습니다: "
+                    f"{_video_failure_message(result, status)}"
                 )
 
         raise VideoGenerationError("영상 생성 polling 시간이 초과되었습니다.")
@@ -214,8 +242,21 @@ class OpenRouterVideoClient:
             with self.opener(http_request, timeout=self.timeout_seconds) as response:
                 result = json.loads(response.read().decode("utf-8"))
         except HTTPError as error:
+            provider_detail = ""
+            try:
+                error_payload = json.loads(error.read().decode("utf-8"))
+                if isinstance(error_payload, dict):
+                    provider_error = error_payload.get("error")
+                    if isinstance(provider_error, dict):
+                        provider_detail = str(provider_error.get("message") or "").strip()
+                    elif provider_error:
+                        provider_detail = str(provider_error).strip()
+            except (JSONDecodeError, UnicodeDecodeError):
+                provider_detail = ""
+
+            detail_suffix = f": {provider_detail[:500]}" if provider_detail else ""
             raise OpenRouterRequestError(
-                f"OpenRouter 영상 요청이 거부되었습니다. HTTP {error.code}",
+                f"OpenRouter 영상 요청이 거부되었습니다. HTTP {error.code}{detail_suffix}",
                 status_code=error.code,
             ) from error
         except URLError as error:
