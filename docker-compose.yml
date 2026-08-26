@@ -41,8 +41,11 @@ services:
       context: .
       dockerfile: Dockerfile.hyperframes
     working_dir: /workspace
+    shm_size: "512m"
     expose:
       - "8787"
+    environment:
+      HYPERFRAMES_NO_TELEMETRY: "1"
     volumes:
       - ./runtime/hyperframes:/workspace
     healthcheck:
