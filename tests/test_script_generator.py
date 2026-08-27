@@ -1,11 +1,14 @@
 import json
+from io import BytesIO
 import os
 import unittest
+from urllib.error import HTTPError
 from unittest.mock import patch
 from app.script_generator import (
     MAX_SCRIPT_DURATION_SECONDS,
     OpenRouterClient,
     OpenRouterConfigurationError,
+    OpenRouterRequestError,
     ScriptGenerationRequest,
     ScriptValidationError,
     build_script_prompt,
@@ -82,6 +85,28 @@ class SequentialOpener:
 
 
 class ScriptGeneratorTests(unittest.TestCase):
+    def test_includes_safe_provider_detail_for_http_errors(self):
+        body = json.dumps(
+            {"error": {"code": "invalid_model", "message": "model is unavailable", "type": "provider"}}
+        ).encode("utf-8")
+
+        def failing_opener(_request, timeout):
+            raise HTTPError("https://openrouter.ai", 403, "Forbidden", {}, BytesIO(body))
+
+        client = OpenRouterClient(
+            api_key="test-key",
+            model="openrouter/test",
+            fallback_model=None,
+            max_attempts=1,
+            opener=failing_opener,
+        )
+
+        with self.assertRaisesRegex(
+            OpenRouterRequestError,
+            r"HTTP 403: code=invalid_model, message=model is unavailable, type=provider",
+        ):
+            client.generate_script(ScriptGenerationRequest(product=PRODUCT))
+
     def test_rejects_script_request_above_product_maximum_duration(self):
         with self.assertRaises(ValueError):
             ScriptGenerationRequest(
