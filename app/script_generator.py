@@ -22,34 +22,79 @@ MAX_SCRIPT_DURATION_SECONDS = 30
 SCRIPT_RESPONSE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["meta", "summary", "scenes", "compliance_notes"],
+    "required": ["meta", "product", "customer", "ads", "video", "scenes", "etc"],
     "properties": {
         "meta": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["output_format_version", "framework", "language"],
+            "required": ["output_format_version", "language"],
             "properties": {
                 "output_format_version": {"type": "string"},
-                "framework": {"type": "string"},
                 "language": {"type": "string"},
             },
         },
-        "summary": {
+        "product": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["usp"],
+            "properties": {
+                "usp": {"type": "string"},
+            },
+        },
+        "customer": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["main_target", "pain_point"],
+            "properties": {
+                "main_target": {"type": ["string", "null"]},
+                "pain_point": {"type": ["string", "null"]},
+            },
+        },
+        "ads": {
             "type": "object",
             "additionalProperties": False,
             "required": [
+                "goal",
+                "cta_action",
+                "channel_platform",
+                "ad_planner",
+                "speaker",
                 "main_target",
-                "pain_point",
-                "product_usp",
-                "key_message",
-                "tone_and_manner",
             ],
             "properties": {
-                "main_target": {"type": "string"},
-                "pain_point": {"type": "string"},
-                "product_usp": {"type": "string"},
-                "key_message": {"type": "string"},
-                "tone_and_manner": {"type": "string"},
+                "goal": {"type": ["string", "null"]},
+                "cta_action": {"type": "string"},
+                "channel_platform": {"type": "string"},
+                "main_target": {"type": ["string", "null"]},
+                "ad_planner": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["persona"],
+                    "properties": {"persona": {"type": ["string", "null"]}},
+                },
+                "speaker": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["persona", "tone"],
+                    "properties": {
+                        "persona": {"type": ["string", "null"]},
+                        "tone": {"type": ["string", "null"]},
+                    },
+                },
+            },
+        },
+        "video": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "video_duration",
+                "required_scenes_elements",
+                "forbidden_scenes_elements",
+            ],
+            "properties": {
+                "video_duration": {"type": "string"},
+                "required_scenes_elements": {"type": ["string", "null"]},
+                "forbidden_scenes_elements": {"type": ["string", "null"]},
             },
         },
         "scenes": {
@@ -58,9 +103,16 @@ SCRIPT_RESPONSE_SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["scene_name", "time_range_sec", "visual", "auditory", "notes"],
+                "required": [
+                    "section",
+                    "time_range_sec",
+                    "visual",
+                    "auditory",
+                    "intent",
+                    "notes",
+                ],
                 "properties": {
-                    "scene_name": {"type": "string"},
+                    "section": {"type": "string"},
                     "time_range_sec": {
                         "type": "object",
                         "additionalProperties": False,
@@ -80,17 +132,18 @@ SCRIPT_RESPONSE_SCHEMA = {
                             "voiceover": {"type": ["string", "null"]},
                         },
                     },
-                    "notes": {"type": "string"},
+                    "intent": {"type": "string"},
+                    "notes": {"type": ["string", "null"]},
                 },
             },
         },
-        "compliance_notes": {
+        "etc": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["avoid", "focus"],
+            "required": ["additional_information", "video_ads_methodology"],
             "properties": {
-                "avoid": {"type": "array", "items": {"type": "string"}},
-                "focus": {"type": "array", "items": {"type": "string"}},
+                "additional_information": {"type": ["string", "null"]},
+                "video_ads_methodology": {"type": ["string", "null"]},
             },
         },
     },
@@ -223,7 +276,7 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 필수 조건:
 - 세로형 9:16 영상
 - 최대 {request.max_duration_seconds}초
-- Hook, Body, CTA 흐름
+- 선택한 광고 방법론을 적용하고 마지막 장면에 CTA를 포함
 - 장면마다 하나의 핵심 행동
 - 영상 없이 자막만 읽어도 이해 가능
 - 첫 장면은 시선을 끌고, 마지막 장면은 구체적인 CTA를 포함
@@ -232,37 +285,50 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - 각 장면의 대사 음절 수가 해당 장면 시간 x 4.5를 넘지 않도록 작성
 {custom_instruction}
 {"- 최종 장면 종료 시간은 다음 중 하나로 작성: " + ", ".join(str(value) for value in request.supported_video_durations) if request.supported_video_durations else ""}
-{"- USP가 비어있거나 null인 경우, 상품 데이터의 다른 정보만을 바탕으로 소비자의 구매를 유도할 수 있는 핵심 소구점(USP)을 도출해 최종 스크립트에 반영하세요." if not has_usp else ""}
+{"- USP가 비어있거나 null인 경우, 상품 데이터의 다른 정보만을 바탕으로 USP를 도출해 product.usp에 출력하고 스크립트에 반영하세요." if not has_usp else ""}
 
 다음 JSON 객체만 반환하세요. Markdown 코드블록이나 설명은 붙이지 마세요.
 {{
   "meta": {{
     "output_format_version": "1.0",
-    "framework": "Hook-Body-CTA",
     "language": "ko"
   }},
-  "summary": {{
+  "product": {{
+    "usp": "상품 데이터로 확인되거나 도출한 USP"
+  }},
+  "customer": {{
     "main_target": "주요 타깃",
-    "pain_point": "타깃의 고민",
-    "product_usp": "제품의 핵심 USP",
-    "key_message": "영상의 핵심 메시지",
-    "tone_and_manner": "영상 분위기"
+    "pain_point": "타깃의 고민"
+  }},
+  "ads": {{
+    "goal": "광고 목표",
+    "cta_action": "시청자가 할 행동",
+    "channel_platform": "업로드 채널",
+    "ad_planner": {{"persona": null}},
+    "speaker": {{"persona": null, "tone": null}},
+    "main_target": "주요 타깃"
+  }},
+  "video": {{
+    "video_duration": "{request.max_duration_seconds}",
+    "required_scenes_elements": null,
+    "forbidden_scenes_elements": null
   }},
   "scenes": [
     {{
-      "scene_name": "Hook",
+      "section": "Hook",
       "time_range_sec": {{"start": 0, "end": 3}},
       "visual": "화면에 보일 장면과 행동",
       "auditory": {{
         "subtitle": "화면 자막",
         "voiceover": "내레이션"
       }},
+      "intent": "장면의 연출 의도",
       "notes": "연출 의도"
     }}
   ],
-  "compliance_notes": {{
-    "avoid": ["피해야 할 내용"],
-    "focus": ["강조할 내용"]
+  "etc": {{
+    "additional_information": null,
+    "video_ads_methodology": "선택한 광고 방법론"
   }}
 }}
 
@@ -322,6 +388,121 @@ def validate_script_document(
     if not isinstance(document, Mapping):
         raise ScriptValidationError("스크립트 응답은 JSON 객체여야 합니다.")
 
+    # Keep previously generated documents readable while new API responses use
+    # the current PRD schema below.
+    if "product" not in document:
+        return _validate_legacy_script_document(document, max_duration_seconds)
+
+    scenes = document.get("scenes")
+    if not isinstance(scenes, list) or not scenes:
+        raise ScriptValidationError("스크립트에는 하나 이상의 scenes가 필요합니다.")
+
+    meta = document.get("meta")
+    if not isinstance(meta, Mapping):
+        raise ScriptValidationError("스크립트의 meta가 필요합니다.")
+    for field in ("output_format_version", "language"):
+        if not isinstance(meta.get(field), str) or not meta[field].strip():
+            raise ScriptValidationError(f"스크립트의 meta.{field}가 필요합니다.")
+
+    product = document.get("product")
+    if not isinstance(product, Mapping) or not isinstance(product.get("usp"), str):
+        raise ScriptValidationError("스크립트의 product.usp가 필요합니다.")
+
+    for parent, fields in {
+        "customer": ("main_target", "pain_point"),
+        "ads": (
+            "goal",
+            "cta_action",
+            "channel_platform",
+            "ad_planner",
+            "speaker",
+            "main_target",
+        ),
+        "video": (
+            "video_duration",
+            "required_scenes_elements",
+            "forbidden_scenes_elements",
+        ),
+        "etc": ("additional_information", "video_ads_methodology"),
+    }.items():
+        value = document.get(parent)
+        if not isinstance(value, Mapping):
+            raise ScriptValidationError(f"스크립트의 {parent}는 객체여야 합니다.")
+        for field in fields:
+            if field not in value:
+                raise ScriptValidationError(f"스크립트의 {parent}.{field}가 필요합니다.")
+
+    ads = document["ads"]
+    for parent, fields in {"ad_planner": ("persona",), "speaker": ("persona", "tone")}.items():
+        value = ads.get(parent)
+        if not isinstance(value, Mapping):
+            raise ScriptValidationError(f"스크립트의 ads.{parent}는 객체여야 합니다.")
+        for field in fields:
+            if field not in value:
+                raise ScriptValidationError(f"스크립트의 ads.{parent}.{field}가 필요합니다.")
+
+    previous_end = 0.0
+    for index, scene in enumerate(scenes, start=1):
+        if not isinstance(scene, Mapping):
+            raise ScriptValidationError(f"{index}번째 scene이 JSON 객체가 아닙니다.")
+        time_range = scene.get("time_range_sec")
+        if not isinstance(time_range, Mapping):
+            raise ScriptValidationError(
+                f"{index}번째 scene의 time_range_sec는 객체여야 합니다."
+            )
+        start = time_range.get("start")
+        end = time_range.get("end")
+        if (
+            not isinstance(start, (int, float))
+            or not isinstance(end, (int, float))
+            or start < 0
+            or end <= start
+            or start < previous_end
+            or (max_duration_seconds is not None and end > max_duration_seconds)
+        ):
+            raise ScriptValidationError(
+                f"{index}번째 scene의 time_range_sec가 올바르지 않습니다."
+            )
+        required_fields = ("section", "visual", "auditory", "intent", "notes")
+        if any(field not in scene for field in required_fields):
+            raise ScriptValidationError(
+                f"{index}번째 scene에 필수 출력 필드가 누락되었습니다."
+            )
+        if not isinstance(scene.get("section"), str) or not scene["section"].strip():
+            raise ScriptValidationError(f"{index}번째 scene의 section이 필요합니다.")
+        if not isinstance(scene.get("visual"), str) or not scene["visual"].strip():
+            raise ScriptValidationError(
+                f"{index}번째 scene의 visual이 필요합니다."
+            )
+        if not isinstance(scene.get("intent"), str) or not scene["intent"].strip():
+            raise ScriptValidationError(f"{index}번째 scene의 intent가 필요합니다.")
+        auditory = scene.get("auditory")
+        if not isinstance(auditory, Mapping):
+            raise ScriptValidationError(f"{index}번째 scene의 auditory가 필요합니다.")
+        if "voiceover" not in auditory:
+            raise ScriptValidationError(f"{index}번째 scene의 voiceover가 필요합니다.")
+        subtitle = auditory.get("subtitle")
+        if subtitle is not None and not isinstance(subtitle, str):
+            raise ScriptValidationError(f"{index}번째 scene의 subtitle이 필요합니다.")
+        if auditory.get("voiceover") is not None and not isinstance(auditory["voiceover"], str):
+            raise ScriptValidationError(
+                f"{index}번째 scene의 voiceover는 문자열 또는 null이어야 합니다."
+            )
+        if scene.get("notes") is not None and not isinstance(scene["notes"], str):
+            raise ScriptValidationError(
+                f"{index}번째 scene의 notes는 문자열 또는 null이어야 합니다."
+            )
+        previous_end = float(end)
+
+    validate_dialogue_lengths(document)
+
+    return dict(document)
+
+
+def _validate_legacy_script_document(
+    document: Mapping[str, Any], max_duration_seconds: int | None = None
+) -> dict[str, Any]:
+    """Read older saved scripts while the PRD schema is being rolled out."""
     scenes = document.get("scenes")
     if not isinstance(scenes, list) or not scenes:
         raise ScriptValidationError("스크립트에는 하나 이상의 scenes가 필요합니다.")
@@ -385,9 +566,7 @@ def validate_script_document(
         if not isinstance(scene.get("scene_name"), str) or not scene["scene_name"].strip():
             raise ScriptValidationError(f"{index}번째 scene의 scene_name이 필요합니다.")
         if not isinstance(scene.get("visual"), str) or not scene["visual"].strip():
-            raise ScriptValidationError(
-                f"{index}번째 scene의 visual이 필요합니다."
-            )
+            raise ScriptValidationError(f"{index}번째 scene의 visual이 필요합니다.")
         auditory = scene.get("auditory")
         if not isinstance(auditory, Mapping):
             raise ScriptValidationError(f"{index}번째 scene의 auditory가 필요합니다.")
@@ -405,7 +584,6 @@ def validate_script_document(
         previous_end = float(end)
 
     validate_dialogue_lengths(document)
-
     return dict(document)
 
 
@@ -525,7 +703,7 @@ class OpenRouterClient:
 
 이전 스크립트 생성 결과가 검증에 실패했습니다.
 실패 사유: {previous_error}
-상품 정보와 Hook-Body-CTA 의도는 유지하되, 실패 사유를 해결한 전체 스크립트를 다시 생성하세요.
+상품 정보와 기존 광고 방법론·장면 의도는 유지하되, 실패 사유를 해결한 전체 스크립트를 다시 생성하세요.
 영상은 9:16 세로형 조건을 따르되 설정값을 meta에 추가하지 말고,
 상품 데이터에 없는 장면이나 효능을 만들지 마세요. JSON만 반환하세요.
 """
