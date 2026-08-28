@@ -31,32 +31,43 @@ PRODUCT = {
 VALID_DOCUMENT = {
     "meta": {
         "output_format_version": "1.0",
-        "framework": "Hook-Body-CTA",
         "language": "ko",
     },
-    "summary": {
+    "product": {"usp": "비건 인증"},
+    "customer": {
         "main_target": "아기 식기를 사용하는 보호자",
         "pain_point": "성분이 걱정되는 보호자",
-        "product_usp": "비건 인증",
-        "key_message": "성분을 확인하고 사용하세요.",
-        "tone_and_manner": "차분한 생활형 광고",
+    },
+    "ads": {
+        "goal": "상품 소개",
+        "cta_action": "상품 확인",
+        "channel_platform": "Instagram Reels",
+        "main_target": "아기 식기를 사용하는 보호자",
+        "ad_planner": {"persona": "차분한 광고 기획자"},
+        "speaker": {"persona": "친절한 화자", "tone": "차분한 말투"},
+    },
+    "video": {
+        "video_duration": "3초",
+        "required_scenes_elements": "제품 이미지",
+        "forbidden_scenes_elements": "확인되지 않은 효능",
+    },
+    "etc": {
+        "additional_information": None,
+        "video_ads_methodology": "Hook-Body-CTA",
     },
     "scenes": [
         {
-            "scene_name": "Hook",
+            "section": "Hook",
             "time_range_sec": {"start": 0, "end": 3},
             "visual": "제품을 화면 중앙에 보여준다.",
             "auditory": {
                 "subtitle": "아기 식기 세제",
                 "voiceover": "성분 확인하세요.",
             },
+            "intent": "제품을 먼저 보여준다.",
             "notes": "제품을 먼저 보여준다.",
         }
     ],
-    "compliance_notes": {
-        "avoid": ["상품 정보에 없는 효능"],
-        "focus": ["제공된 상품 정보"],
-    },
 }
 
 
@@ -344,7 +355,7 @@ class ScriptGeneratorTests(unittest.TestCase):
 
     def test_retries_with_fallback_model_after_schema_failure(self):
         invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
-        del invalid_document["meta"]["framework"]
+        del invalid_document["meta"]["language"]
         opener = SequentialOpener([
             {"choices": [{"message": {"content": json.dumps(invalid_document)}}]},
             {"choices": [{"message": {"content": json.dumps(VALID_DOCUMENT)}}]},
@@ -413,7 +424,7 @@ class ScriptGeneratorTests(unittest.TestCase):
 
     def test_honors_configured_attempts_even_after_fallback_model_is_used(self):
         invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
-        del invalid_document["meta"]["framework"]
+        del invalid_document["meta"]["language"]
         opener = SequentialOpener([
             {"choices": [{"message": {"content": json.dumps(invalid_document)}}]},
             {"choices": [{"message": {"content": json.dumps(invalid_document)}}]},
