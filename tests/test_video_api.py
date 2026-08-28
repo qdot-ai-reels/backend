@@ -101,12 +101,41 @@ class VideoApiTests(unittest.TestCase):
             "app.api.v1.video.LOCAL_VIDEO_OUTPUT_DIR", Path(directory)
         ):
             source = Path(directory) / "generated.mp4"
-            source.write_bytes(b"video")
+            import subprocess
+            subprocess.run(
+                [
+                    "ffmpeg", "-v", "error", "-y",
+                    "-f", "lavfi", "-i", "color=c=blue:s=320x568:d=1",
+                    "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                    "-map", "0:v:0", "-map", "1:a:0",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    str(source),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
             result = publish_validated_video(str(source), generated)
 
         self.assertEqual(result.storage_path.endswith("job-1/final.mp4"), True)
         self.assertEqual(result.playback_url, "/api/v1/reels/video/job-1/file")
         self.assertEqual(result.download_url, "/api/v1/reels/video/job-1/file?download=true")
+        self.assertEqual(self._stream_count(Path(result.storage_path), "a:0"), 0)
+
+    @staticmethod
+    def _stream_count(path, selector):
+        import subprocess
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", selector,
+                "-show_entries", "stream=index", "-of", "csv=p=0", str(path),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return len([line for line in result.stdout.splitlines() if line.strip()])
 
     def test_returns_local_video_url(self):
         result = get_video_access_url("job-1", download=True)

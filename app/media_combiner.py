@@ -48,6 +48,33 @@ class MediaDurationMismatchError(MediaCombineError):
 DEFAULT_DURATION_TOLERANCE_SECONDS = 0.1
 
 
+def remove_audio_track(video_path: str | Path, output_path: str | Path) -> Path:
+    """Copy only the video stream so provider-generated audio is discarded."""
+    video = Path(video_path)
+    output = Path(output_path)
+    if not video.is_file():
+        raise MediaCombineError(f"영상 파일을 찾을 수 없습니다: {video}")
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-y", "-i", str(video),
+                "-map", "0:v:0", "-c:v", "copy", "-an", str(output),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError as error:
+        raise MediaCombineError("FFmpeg가 설치되지 않았습니다.") from error
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.decode("utf-8", errors="replace")[-500:]
+        raise MediaCombineError(f"영상 오디오 트랙을 제거하지 못했습니다: {detail}") from error
+
+    return output
+
+
 def read_media_duration(path: str | Path) -> float:
     """Read a media file's duration in seconds with FFprobe."""
     media_path = Path(path)

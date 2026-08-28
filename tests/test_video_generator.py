@@ -81,6 +81,12 @@ class VideoGeneratorTests(unittest.TestCase):
     def setUp(self):
         self.image_dimensions_reader = lambda _image_url: (720, 1280)
 
+    def test_defaults_to_ten_minute_video_poll_window(self):
+        client = OpenRouterVideoClient(api_key="test-key")
+
+        self.assertEqual(client.poll_interval_seconds, 5.0)
+        self.assertEqual(client.max_poll_attempts, 120)
+
     def test_builds_prompt_from_script_scenes(self):
         prompt = build_video_prompt(SCRIPT)
 

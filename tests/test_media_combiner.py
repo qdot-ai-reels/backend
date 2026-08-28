@@ -6,11 +6,31 @@ from pathlib import Path
 from app.media_combiner import (
     MediaCombineError,
     combine_video_and_audio,
+    remove_audio_track,
     read_media_duration,
 )
 
 
 class MediaCombinerTests(unittest.TestCase):
+    def test_removes_provider_audio_from_video(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            video_path = directory / "input-with-audio.mp4"
+            output_path = directory / "video-only.mp4"
+
+            self._run_ffmpeg([
+                "-f", "lavfi", "-i", "color=c=blue:s=320x568:d=2",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", str(video_path),
+            ])
+
+            remove_audio_track(video_path, output_path)
+
+            self.assertEqual(self._stream_count(output_path, "v:0"), 1)
+            self.assertEqual(self._stream_count(output_path, "a:0"), 0)
+
     def test_combines_video_and_audio_into_mp4(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
