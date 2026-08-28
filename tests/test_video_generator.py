@@ -64,6 +64,9 @@ class SequentialOpener:
 
 
 class VideoGeneratorTests(unittest.TestCase):
+    def setUp(self):
+        self.image_dimensions_reader = lambda _image_url: (720, 1280)
+
     def test_builds_prompt_from_script_scenes(self):
         prompt = build_video_prompt(SCRIPT)
 
@@ -87,6 +90,7 @@ class VideoGeneratorTests(unittest.TestCase):
             model="google/veo-3.1-lite",
             opener=opener,
             sleeper=lambda _seconds: None,
+            image_dimensions_reader=self.image_dimensions_reader,
         )
 
         result = client.generate_video(VideoGenerationRequest(script=SCRIPT, image_url="https://example.com/product.jpg"))
@@ -101,6 +105,35 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertFalse(request_body["generate_audio"])
         self.assertEqual(request_body["frame_images"][0]["frame_type"], "first_frame")
 
+    def test_submits_product_and_influencer_as_reference_images(self):
+        opener = SequentialOpener([
+            {"id": "job-1", "polling_url": "https://example.com/poll/job-1", "status": "pending"},
+            {"id": "job-1", "status": "completed", "unsigned_urls": ["https://example.com/video.mp4"]},
+        ])
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            opener=opener,
+            sleeper=lambda _seconds: None,
+            image_dimensions_reader=self.image_dimensions_reader,
+        )
+
+        client.generate_video(
+            VideoGenerationRequest(
+                script=SCRIPT,
+                image_url="https://example.com/product.jpg",
+                influencer_image_url="https://example.com/influencer.jpg",
+            )
+        )
+
+        request_body = json.loads(opener.requests[0].data)
+        self.assertNotIn("frame_images", request_body)
+        self.assertEqual(
+            [item["image_url"]["url"] for item in request_body["input_references"]],
+            ["https://example.com/product.jpg", "https://example.com/influencer.jpg"],
+        )
+        self.assertIn("Image 1", request_body["prompt"])
+        self.assertIn("Image 2", request_body["prompt"])
+
     def test_raises_when_video_job_fails(self):
         opener = SequentialOpener([
             {"id": "job-1", "polling_url": "https://example.com/poll/job-1", "status": "pending"},
@@ -111,6 +144,7 @@ class VideoGeneratorTests(unittest.TestCase):
             model="google/veo-3.1-lite",
             opener=opener,
             sleeper=lambda _seconds: None,
+            image_dimensions_reader=self.image_dimensions_reader,
         )
 
         with self.assertRaises(VideoGenerationError):
@@ -121,7 +155,12 @@ class VideoGeneratorTests(unittest.TestCase):
             {"id": "job-1", "polling_url": "https://example.com/poll/job-1", "status": "pending"},
             {"id": "job-1", "status": "completed", "unsigned_urls": ["https://example.com/video.mp4"]},
         ])
-        client = OpenRouterVideoClient(api_key="test-key", opener=opener, sleeper=lambda _seconds: None)
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            opener=opener,
+            sleeper=lambda _seconds: None,
+            image_dimensions_reader=self.image_dimensions_reader,
+        )
 
         client.generate_video(VideoGenerationRequest(script=SCRIPT, image_url="https://example.com/product.jpg"))
 
@@ -136,6 +175,7 @@ class VideoGeneratorTests(unittest.TestCase):
             api_key="test-key",
             opener=opener,
             supported_durations=(4, 6, 8),
+            image_dimensions_reader=self.image_dimensions_reader,
         )
 
         with self.assertRaises(VideoGenerationError):
@@ -153,6 +193,7 @@ class VideoGeneratorTests(unittest.TestCase):
             api_key="test-key",
             opener=opener,
             supported_durations=(2, 4, 6, 8),
+            image_dimensions_reader=self.image_dimensions_reader,
         )
 
         with self.assertRaises(VideoGenerationError) as context:
@@ -169,6 +210,7 @@ class VideoGeneratorTests(unittest.TestCase):
             api_key="test-key",
             opener=opener,
             sleeper=lambda _seconds: None,
+            image_dimensions_reader=self.image_dimensions_reader,
         )
 
         with self.assertRaises(VideoGenerationError):
@@ -176,6 +218,48 @@ class VideoGeneratorTests(unittest.TestCase):
                 VideoGenerationRequest(
                     script={"meta": {"language": "ko"}, "scenes": []},
                     image_url="https://example.com/product.jpg",
+                )
+            )
+
+        self.assertEqual(opener.requests, [])
+
+    def test_rejects_image_with_dimension_smaller_than_100_before_api_call(self):
+        opener = SequentialOpener([])
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            opener=opener,
+            image_dimensions_reader=lambda _image_url: (800, 1),
+        )
+
+        with self.assertRaises(VideoGenerationError) as context:
+            client.generate_video(
+                VideoGenerationRequest(
+                    script=SCRIPT,
+                    image_url="https://example.com/product.jpg",
+                )
+            )
+
+        self.assertIn("100px 이상", str(context.exception))
+        self.assertEqual(opener.requests, [])
+
+    def test_rejects_small_influencer_image_before_api_call(self):
+        opener = SequentialOpener([])
+
+        def read_dimensions(image_url):
+            return (720, 1280) if "product" in image_url else (99, 500)
+
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            opener=opener,
+            image_dimensions_reader=read_dimensions,
+        )
+
+        with self.assertRaises(VideoGenerationError):
+            client.generate_video(
+                VideoGenerationRequest(
+                    script=SCRIPT,
+                    image_url="https://example.com/product.jpg",
+                    influencer_image_url="https://example.com/influencer.jpg",
                 )
             )
 

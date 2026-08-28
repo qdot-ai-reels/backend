@@ -11,6 +11,7 @@ from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from app.image_metadata import read_image_dimensions, validate_image_dimensions
 from app.script_generator import (
     OpenRouterConfigurationError,
     OpenRouterRequestError,
@@ -35,6 +36,7 @@ class VideoGenerationRequest:
     resolution: str = "1080p"
     aspect_ratio: str = "9:16"
     generate_audio: bool = False
+    influencer_image_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -45,7 +47,10 @@ class VideoGenerationResult:
     cost: float | None = None
 
 
-def build_video_prompt(script: Mapping[str, Any]) -> str:
+def build_video_prompt(
+    script: Mapping[str, Any],
+    has_influencer_image: bool = False,
+) -> str:
     """Convert a validated script document into a video-generation prompt."""
     scenes = script.get("scenes", [])
     scene_lines = []
@@ -60,11 +65,18 @@ def build_video_prompt(script: Mapping[str, Any]) -> str:
             f"내레이션={auditory.get('voiceover', '')}"
         )
 
+    reference_instruction = (
+        "Use Image 1 as the product reference and Image 2 as the AI influencer reference. "
+        "Have the AI influencer appear and promote the product while preserving the "
+        "influencer's identity and the product's shape, label, colors, and text. "
+        if has_influencer_image
+        else "Use the provided product image as the visual reference and preserve the product shape, label, colors, and text. "
+    )
     return (
-        "Create a vertical product advertisement video. Use the provided product image "
-        "as the visual reference and preserve the product shape, label, colors, and text. "
-        "Use a 9:16 aspect ratio, clean lighting, and simple transitions. "
-        "Do not add unsupported product claims, extra products, people, hands, new logos, "
+        "Create a vertical product advertisement video. "
+        + reference_instruction
+        + "Use a 9:16 aspect ratio, clean lighting, and simple transitions. "
+        "Do not add unsupported product claims, extra products, new logos, "
         "or distorted text. Follow these script scenes:\n"
         + "\n".join(scene_lines)
     )
@@ -87,6 +99,7 @@ class OpenRouterVideoClient:
         supported_resolutions: tuple[str, ...] = ("1080p",),
         opener: Callable[..., Any] = urlopen,
         sleeper: Callable[[float], None] = time.sleep,
+        image_dimensions_reader: Callable[[str], tuple[int, int]] = read_image_dimensions,
     ) -> None:
         if max_poll_attempts < 1:
             raise ValueError("max_poll_attempts는 1 이상이어야 합니다.")
@@ -101,6 +114,7 @@ class OpenRouterVideoClient:
         self.supported_resolutions = supported_resolutions
         self.opener = opener
         self.sleeper = sleeper
+        self.image_dimensions_reader = image_dimensions_reader
 
     @classmethod
     def from_env(cls) -> "OpenRouterVideoClient":
@@ -131,6 +145,18 @@ class OpenRouterVideoClient:
             )
         if not request.image_url:
             raise VideoGenerationError("영상 생성에는 상품 이미지 URL이 필요합니다.")
+        try:
+            validate_image_dimensions(
+                request.image_url,
+                dimensions_reader=self.image_dimensions_reader,
+            )
+            if request.influencer_image_url:
+                validate_image_dimensions(
+                    request.influencer_image_url,
+                    dimensions_reader=self.image_dimensions_reader,
+                )
+        except ValueError as error:
+            raise VideoGenerationError(f"입력 이미지를 사용할 수 없습니다: {error}") from error
         duration_seconds = self._validate_and_get_duration(request.script)
         if duration_seconds not in self.supported_durations:
             supported = ", ".join(str(value) for value in self.supported_durations)
@@ -139,22 +165,33 @@ class OpenRouterVideoClient:
                 f"지원 길이: {supported}초"
             )
 
+        request_payload = {
+            "model": self.model,
+            "prompt": build_video_prompt(
+                request.script,
+                has_influencer_image=bool(request.influencer_image_url),
+            ),
+            "duration": duration_seconds,
+            "resolution": request.resolution,
+            "aspect_ratio": request.aspect_ratio,
+            "generate_audio": request.generate_audio,
+        }
+        if request.influencer_image_url:
+            request_payload["input_references"] = [
+                self._image_reference(request.image_url),
+                self._image_reference(request.influencer_image_url),
+            ]
+        else:
+            request_payload["frame_images"] = [{
+                "type": "image_url",
+                "image_url": {"url": request.image_url},
+                "frame_type": "first_frame",
+            }]
+
         submit_response = self._request_json(
             method="POST",
             url=self.api_url,
-            payload={
-                "model": self.model,
-                "prompt": build_video_prompt(request.script),
-                "duration": duration_seconds,
-                "resolution": request.resolution,
-                "aspect_ratio": request.aspect_ratio,
-                "generate_audio": request.generate_audio,
-                "frame_images": [{
-                    "type": "image_url",
-                    "image_url": {"url": request.image_url},
-                    "frame_type": "first_frame",
-                }],
-            },
+            payload=request_payload,
         )
         job_id = submit_response.get("id")
         polling_url = submit_response.get("polling_url")
@@ -184,6 +221,13 @@ class OpenRouterVideoClient:
                 )
 
         raise VideoGenerationError("영상 생성 polling 시간이 초과되었습니다.")
+
+    @staticmethod
+    def _image_reference(image_url: str) -> dict[str, Any]:
+        return {
+            "type": "image_url",
+            "image_url": {"url": image_url},
+        }
 
     @staticmethod
     def _validate_and_get_duration(script: Mapping[str, Any]) -> int:
