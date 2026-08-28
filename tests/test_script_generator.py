@@ -277,6 +277,7 @@ class ScriptGeneratorTests(unittest.TestCase):
         prompt = build_script_prompt(request)
 
         self.assertNotIn("USP가 비어있거나 null인 경우", prompt)
+        self.assertIn("입력받은 USP값을 그대로 출력", prompt)
         self.assertIn("안심 세척", prompt)
 
     def test_asks_to_derive_usp_when_product_usp_is_only_whitespace(self):
@@ -338,6 +339,16 @@ class ScriptGeneratorTests(unittest.TestCase):
 
         self.assertIn("거품이 잘 납니다.", prompt)
         self.assertIn("30초 이내 광고로 작성", prompt)
+
+    def test_includes_prompt_filling_rule_and_ad_methodologies(self):
+        prompt = build_script_prompt(
+            ScriptGenerationRequest(product=PRODUCT, custom_prompt="리필 여부를 확인해 반영")
+        )
+
+        self.assertIn("유저가 프롬프트를 통해 해당 상품정보를 입력해주었다면", prompt)
+        self.assertIn("Hook-Body-CTA", prompt)
+        self.assertIn("PAS", prompt)
+        self.assertIn("Anti-Slop Prompt For Video", prompt)
 
     def test_adds_product_image_to_multimodal_message(self):
         request = ScriptGenerationRequest(

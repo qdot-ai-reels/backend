@@ -277,15 +277,18 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - 세로형 9:16 영상
 - 최대 {request.max_duration_seconds}초
 - 선택한 광고 방법론을 적용하고 마지막 장면에 CTA를 포함
+- 사용할 수 있는 광고 방법론: Hook-Body-CTA, PAS, AIDA, BAB(Before-After-Bridge), 4Ps(Promise-Picture-Proof-Push)
+- 필요한 경우 Anti-Slop Prompt For Video를 활용해 과도하게 인공적인 표현을 줄이세요.
 - 장면마다 하나의 핵심 행동
 - 영상 없이 자막만 읽어도 이해 가능
 - 첫 장면은 시선을 끌고, 마지막 장면은 구체적인 CTA를 포함
 - 자막은 짧게 작성하고 화면에 넣을 문구와 내레이션을 구분
 - 대사는 장면 시간 안에 읽을 수 있도록 작성하고, 평균 1초당 4.5음절을 기준으로 계산
 - 각 장면의 대사 음절 수가 해당 장면 시간 x 4.5를 넘지 않도록 작성
+- 유저가 프롬프트를 통해 해당 상품정보를 입력해주었다면 해당 내용을 반영하세요.
 {custom_instruction}
 {"- 최종 장면 종료 시간은 다음 중 하나로 작성: " + ", ".join(str(value) for value in request.supported_video_durations) if request.supported_video_durations else ""}
-{"- USP가 비어있거나 null인 경우, 상품 데이터의 다른 정보만을 바탕으로 USP를 도출해 product.usp에 출력하고 스크립트에 반영하세요." if not has_usp else ""}
+{"- USP가 비어있거나 null인 경우, 상품 데이터의 다른 정보만을 바탕으로 USP를 도출해 product.usp에 출력하고 스크립트에 반영하세요." if not has_usp else "- USP가 입력되어 있으면 입력받은 USP값을 그대로 출력하고 product.usp에 저장한 뒤 스크립트에 반영하세요."}
 
 다음 JSON 객체만 반환하세요. Markdown 코드블록이나 설명은 붙이지 마세요.
 {{

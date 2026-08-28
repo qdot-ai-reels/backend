@@ -37,6 +37,7 @@ class VideoGenerationRequest:
     aspect_ratio: str = "9:16"
     generate_audio: bool = False
     influencer_image_url: str | None = None
+    detail_image_urls: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -66,7 +67,8 @@ def build_video_prompt(
         )
 
     reference_instruction = (
-        "Use Image 1 as the product reference and Image 2 as the AI influencer reference. "
+        "Use Image 1 as the AI influencer reference and Image 2 as the main product reference. "
+        "Use any following images as additional product detail references. "
         "The AI influencer must be clearly visible on screen and actively promote the "
         "product in the generated video; do not replace the influencer with only a hand, "
         "finger, or an off-screen action. Preserve the "
@@ -80,8 +82,37 @@ def build_video_prompt(
         + "Use a 9:16 aspect ratio, clean lighting, and simple transitions. "
         "Do not add unsupported product claims, extra products, new logos, "
         "or distorted text. Follow these script scenes:\n"
+        + "Script context:\n"
+        + convert_dict_to_formatted_text(script)
+        + "\n"
         + "\n".join(scene_lines)
     )
+
+
+def convert_dict_to_formatted_text(data: Mapping[str, Any]) -> str:
+    """Format non-scene script fields for the video model prompt."""
+    lines: list[str] = []
+
+    def append_value(value: Any, indent: int) -> None:
+        prefix = "  " * indent
+        if isinstance(value, Mapping):
+            for key, child in value.items():
+                if key == "scenes":
+                    continue
+                if isinstance(child, (Mapping, list)):
+                    lines.append(f"{prefix}- {key}")
+                    append_value(child, indent + 1)
+                else:
+                    lines.append(f"{prefix}- {key}: {child}")
+        elif isinstance(value, list):
+            for child in value:
+                if isinstance(child, (Mapping, list)):
+                    append_value(child, indent)
+                else:
+                    lines.append(f"{prefix}- {child}")
+
+    append_value(data, 0)
+    return "\n".join(lines)
 
 
 class OpenRouterVideoClient:
@@ -160,6 +191,11 @@ class OpenRouterVideoClient:
                     request.influencer_image_url,
                     dimensions_reader=self.image_dimensions_reader,
                 )
+            for detail_image_url in request.detail_image_urls:
+                validate_image_dimensions(
+                    detail_image_url,
+                    dimensions_reader=self.image_dimensions_reader,
+                )
         except ValueError as error:
             raise VideoGenerationError(f"입력 이미지를 사용할 수 없습니다: {error}") from error
         duration_seconds = self._validate_and_get_duration(request.script)
@@ -183,8 +219,12 @@ class OpenRouterVideoClient:
         }
         if request.influencer_image_url:
             submit_payload["input_references"] = [
-                self._image_reference(request.image_url),
                 self._image_reference(request.influencer_image_url),
+                self._image_reference(request.image_url),
+                *(
+                    self._image_reference(image_url)
+                    for image_url in request.detail_image_urls
+                ),
             ]
         else:
             submit_payload.update(_video_image_payload(self.model, request.image_url))

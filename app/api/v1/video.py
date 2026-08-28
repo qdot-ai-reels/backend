@@ -33,6 +33,7 @@ class VideoGenerationBody(BaseModel):
     script: dict[str, Any] = Field(min_length=1)
     image_url: str = Field(min_length=1)
     influencer_image_url: str = Field(min_length=1)
+    detail_image_urls: list[str] = Field(default_factory=list)
     resolution: str | None = None
     aspect_ratio: Literal["9:16"] = "9:16"
     generate_audio: bool = False
@@ -56,6 +57,7 @@ def generate_video(
         aspect_ratio=body.aspect_ratio,
         generate_audio=body.generate_audio,
         influencer_image_url=body.influencer_image_url,
+        detail_image_urls=tuple(body.detail_image_urls),
     )
 
     try:
@@ -69,6 +71,7 @@ def generate_video(
                 aspect_ratio=request.aspect_ratio,
                 generate_audio=request.generate_audio,
                 influencer_image_url=request.influencer_image_url,
+                detail_image_urls=request.detail_image_urls,
             )
         client = build_video_client(service, capabilities)
         max_retries = (

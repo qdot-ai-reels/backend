@@ -109,7 +109,13 @@ def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
         if script is None:
             script = _generate_script(payload, service)
             update_job(job_id, script_json=json.dumps(script, ensure_ascii=False))
-        video_result = _generate_video(script, image_url, influencer_image_url, service)
+        video_result = _generate_video(
+            script,
+            image_url,
+            influencer_image_url,
+            _extract_detail_image_urls(payload.get("product")),
+            service,
+        )
         if not video_result.storage_path:
             raise RuntimeError("검증된 영상의 로컬 저장 경로를 확인할 수 없습니다.")
         update_job(job_id, video_job_id=video_result.job_id, cost=video_result.total_cost)
@@ -159,6 +165,7 @@ def _generate_video(
     script: dict[str, Any],
     image_url: str,
     influencer_image_url: str | None,
+    detail_image_urls: tuple[str, ...],
     service: SettingsService | None,
 ):
     capabilities = get_video_model_capabilities(service)
@@ -170,6 +177,7 @@ def _generate_video(
         aspect_ratio="9:16",
         generate_audio=False,
         influencer_image_url=influencer_image_url,
+        detail_image_urls=detail_image_urls,
     )
     retries = service.get_runtime_settings().video_generation_retries if service else 1
     return VideoValidationPipeline(generate_video=lambda pipeline_request, _attempt: client.generate_video(pipeline_request), publish_video=publish_validated_video, max_retries=retries).run(request)
@@ -183,6 +191,20 @@ def _extract_image_url(value: Any) -> str | None:
         if isinstance(image_url, str) and image_url.strip():
             return image_url
     return None
+
+
+def _extract_detail_image_urls(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, dict):
+        return ()
+    product = value.get("product") if isinstance(value.get("product"), dict) else value
+    candidates = product.get("detail_image_urls", [])
+    if not isinstance(candidates, list):
+        return ()
+    return tuple(
+        image_url.strip()
+        for image_url in candidates
+        if isinstance(image_url, str) and image_url.strip()
+    )
 
 
 def _build_settings_service() -> tuple[SettingsService | None, Any]:
