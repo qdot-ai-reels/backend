@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from app.script_generator import OpenRouterClient
+from app.script_generator import OpenRouterClient, select_supported_video_duration
 from app.settings_service import (
     OpenRouterVideoCatalogClient,
     ProviderCatalogError,
@@ -53,6 +53,25 @@ def get_video_model_capabilities(service: SettingsService | None = None) -> Vide
             f"선택한 영상 모델의 capability 정보를 찾을 수 없습니다: {selected_model}"
         )
     return capabilities
+
+
+def resolve_script_generation_duration(
+    max_duration_seconds: int, service: SettingsService | None = None
+) -> tuple[int, tuple[int, ...] | None]:
+    """Resolve a script duration against the selected video's live capabilities."""
+    api_key = os.getenv("OPENROUTER_VIDEO_API_KEY", "")
+    if service is not None:
+        api_key = service.get_video_api_key() or api_key
+
+    # Keep script-only local tests usable when no video provider is configured.
+    if not api_key:
+        return max_duration_seconds, None
+
+    capabilities = get_video_model_capabilities(service)
+    duration = select_supported_video_duration(
+        max_duration_seconds, capabilities.supported_durations
+    )
+    return duration, capabilities.supported_durations
 
 
 def build_video_client(

@@ -10,7 +10,8 @@ from app.script_generator import (
     ScriptValidationError,
 )
 from app.api.v1.settings import get_optional_settings_repository
-from app.runtime_config import build_script_client
+from app.runtime_config import build_script_client, resolve_script_generation_duration
+from app.settings_service import ProviderCatalogError
 from app.settings_service import SettingsService
 
 
@@ -41,24 +42,27 @@ def generate_script(
     max_duration_seconds = body.max_duration_seconds or (
         service.get_runtime_settings().video_max_duration_seconds if service else 15
     )
-    request = ScriptGenerationRequest(
-        product=body.product,
-        image_url=body.image_url,
-        reviews=body.reviews,
-        custom_prompt=body.prompt,
-        max_duration_seconds=max_duration_seconds,
-        channel=body.channel,
-        target_audience=body.target_audience,
-    )
-
     try:
+        max_duration_seconds, supported_durations = resolve_script_generation_duration(
+            max_duration_seconds, service
+        )
+        request = ScriptGenerationRequest(
+            product=body.product,
+            image_url=body.image_url,
+            reviews=body.reviews,
+            custom_prompt=body.prompt,
+            max_duration_seconds=max_duration_seconds,
+            channel=body.channel,
+            target_audience=body.target_audience,
+            supported_video_durations=supported_durations,
+        )
         return build_script_client(service).generate_script(request)
     except OpenRouterConfigurationError as error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(error),
         ) from error
-    except (OpenRouterRequestError, ScriptValidationError) as error:
+    except (OpenRouterRequestError, ScriptValidationError, ProviderCatalogError, ValueError) as error:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(error),

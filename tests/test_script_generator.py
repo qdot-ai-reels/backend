@@ -10,6 +10,7 @@ from app.script_generator import (
     OpenRouterConfigurationError,
     OpenRouterRequestError,
     ScriptGenerationRequest,
+    select_supported_video_duration,
     ScriptValidationError,
     build_script_prompt,
     build_script_message_content,
@@ -85,6 +86,14 @@ class SequentialOpener:
 
 
 class ScriptGeneratorTests(unittest.TestCase):
+    def test_selects_longest_supported_duration_under_configured_cap(self):
+        self.assertEqual(select_supported_video_duration(15, (5, 10)), 10)
+        self.assertEqual(select_supported_video_duration(8, (5, 10)), 5)
+
+    def test_rejects_cap_below_all_supported_durations(self):
+        with self.assertRaisesRegex(ValueError, "사용할 수 있는 모델 지원 길이가 없습니다"):
+            select_supported_video_duration(3, (5, 10))
+
     def test_includes_safe_provider_detail_for_http_errors(self):
         body = json.dumps(
             {"error": {"code": "invalid_model", "message": "model is unavailable", "type": "provider"}}
