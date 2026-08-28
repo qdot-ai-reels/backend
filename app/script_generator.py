@@ -169,6 +169,25 @@ class ScriptGenerationRequest:
             )
 
 
+def select_supported_video_duration(
+    max_duration_seconds: int, supported_durations: tuple[int, ...] | None
+) -> int:
+    """Choose the longest duration supported without exceeding the configured cap."""
+    if not supported_durations:
+        return max_duration_seconds
+
+    candidates = sorted(
+        {duration for duration in supported_durations if 1 <= duration <= max_duration_seconds}
+    )
+    if not candidates:
+        supported = ", ".join(str(duration) for duration in sorted(set(supported_durations)))
+        raise ValueError(
+            f"설정된 최대 영상 길이({max_duration_seconds}초) 이하로 사용할 수 있는 "
+            f"모델 지원 길이가 없습니다. 지원 길이: {supported}초"
+        )
+    return candidates[-1]
+
+
 def prepare_product_for_prompt(product: Mapping[str, Any]) -> dict[str, Any]:
     """Remove fields that the team decided not to use for script generation."""
     return {

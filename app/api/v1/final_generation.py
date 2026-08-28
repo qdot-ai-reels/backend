@@ -18,7 +18,13 @@ from app.core.config import settings
 from app.db import SQLAlchemySettingsRepository, SessionLocal
 from app.generation_jobs import create_job, get_job, update_job
 from app.media_combiner import combine_video_and_audio
-from app.runtime_config import build_script_client, build_tts_settings, build_video_client, get_video_model_capabilities
+from app.runtime_config import (
+    build_script_client,
+    build_tts_settings,
+    build_video_client,
+    get_video_model_capabilities,
+    resolve_script_generation_duration,
+)
 from app.script_generator import ScriptGenerationRequest
 from app.settings_service import SettingsService
 from app.tts_generator import OpenRouterTTSClient
@@ -131,14 +137,20 @@ def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
 def _generate_script(payload: dict[str, Any], service: SettingsService | None) -> dict[str, Any]:
     raw = payload.get("product") or {}
     product = raw.get("product") if isinstance(raw.get("product"), dict) else raw
+    max_duration_seconds, supported_durations = resolve_script_generation_duration(
+        payload.get("max_duration_seconds")
+        or (service.get_runtime_settings().video_max_duration_seconds if service else 15),
+        service,
+    )
     request = ScriptGenerationRequest(
         product=product,
         image_url=payload.get("image_url") or _extract_image_url(raw),
         reviews=payload.get("reviews") or raw.get("reviews", []),
         custom_prompt=payload.get("prompt"),
-        max_duration_seconds=payload.get("max_duration_seconds") or (service.get_runtime_settings().video_max_duration_seconds if service else 15),
+        max_duration_seconds=max_duration_seconds,
         channel=payload.get("channel", "Instagram Reels"),
         target_audience=payload.get("target_audience", "육아에 관심 있는 보호자"),
+        supported_video_durations=supported_durations,
     )
     return build_script_client(service).generate_script(request)
 
