@@ -32,6 +32,7 @@ LOCAL_VIDEO_OUTPUT_DIR = Path(os.getenv("VIDEO_OUTPUT_DIR", "runtime/videos"))
 class VideoGenerationBody(BaseModel):
     script: dict[str, Any] = Field(min_length=1)
     image_url: str = Field(min_length=1)
+    influencer_image_url: str = Field(min_length=1)
     resolution: str | None = None
     aspect_ratio: str = "9:16"
     generate_audio: bool = False
@@ -54,6 +55,7 @@ def generate_video(
         resolution=body.resolution or "1080p",
         aspect_ratio=body.aspect_ratio,
         generate_audio=body.generate_audio,
+        influencer_image_url=body.influencer_image_url,
     )
 
     try:
@@ -66,6 +68,7 @@ def generate_video(
                 resolution=resolution,
                 aspect_ratio=request.aspect_ratio,
                 generate_audio=request.generate_audio,
+                influencer_image_url=request.influencer_image_url,
             )
         client = build_video_client(service, capabilities)
         max_retries = (

@@ -13,7 +13,8 @@ class FinalGenerationApiTests(unittest.TestCase):
         body = FinalGenerationBody(
             product={
                 "product": {"name": "상품", "image_url": "https://example.com/product.jpg"}
-            }
+            },
+            influencer_image_url="https://example.com/influencer.jpg",
         )
 
         self.assertIsNotNone(body.product)
@@ -23,10 +24,27 @@ class FinalGenerationApiTests(unittest.TestCase):
         body = FinalGenerationBody(
             script={"meta": {}, "summary": {}, "scenes": []},
             image_url="https://example.com/product.jpg",
+            influencer_image_url="https://example.com/influencer.jpg",
         )
 
         self.assertIsNotNone(body.script)
         self.assertIsNone(body.product)
+
+    def test_requires_influencer_image(self):
+        with self.assertRaises(ValidationError):
+            FinalGenerationBody(
+                script={"meta": {}, "summary": {}, "scenes": []},
+                image_url="https://example.com/product.jpg",
+            )
+
+    def test_accepts_influencer_image(self):
+        body = FinalGenerationBody(
+            script={"meta": {}, "summary": {}, "scenes": []},
+            image_url="https://example.com/product.jpg",
+            influencer_image_url="https://example.com/influencer.jpg",
+        )
+
+        self.assertEqual(body.influencer_image_url, "https://example.com/influencer.jpg")
 
     def test_rejects_missing_input(self):
         with self.assertRaises(ValidationError):
@@ -50,6 +68,7 @@ class FinalGenerationApiTests(unittest.TestCase):
                 json={
                     "script": {"scenes": []},
                     "image_url": "https://example.com/product.jpg",
+                    "influencer_image_url": "https://example.com/influencer.jpg",
                 },
             )
 

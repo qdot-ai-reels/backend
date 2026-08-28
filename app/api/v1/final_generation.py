@@ -36,6 +36,7 @@ class FinalGenerationBody(BaseModel):
     product: dict[str, Any] | None = None
     script: dict[str, Any] | None = None
     image_url: str | None = Field(default=None, min_length=1)
+    influencer_image_url: str = Field(min_length=1)
     reviews: list[Any] = Field(default_factory=list)
     prompt: str | None = None
     max_duration_seconds: int | None = Field(default=None, ge=1, le=30)
@@ -98,10 +99,11 @@ def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
         service, session = _build_settings_service()
         script = payload.get("script")
         image_url = payload.get("image_url") or _extract_image_url(payload.get("product"))
+        influencer_image_url = payload.get("influencer_image_url")
         if script is None:
             script = _generate_script(payload, service)
             update_job(job_id, script_json=json.dumps(script, ensure_ascii=False))
-        video_result = _generate_video(script, image_url, service)
+        video_result = _generate_video(script, image_url, influencer_image_url, service)
         if not video_result.storage_path:
             raise RuntimeError("검증된 영상의 로컬 저장 경로를 확인할 수 없습니다.")
         update_job(job_id, video_job_id=video_result.job_id, cost=video_result.total_cost)
@@ -141,10 +143,22 @@ def _generate_script(payload: dict[str, Any], service: SettingsService | None) -
     return build_script_client(service).generate_script(request)
 
 
-def _generate_video(script: dict[str, Any], image_url: str, service: SettingsService | None):
+def _generate_video(
+    script: dict[str, Any],
+    image_url: str,
+    influencer_image_url: str | None,
+    service: SettingsService | None,
+):
     capabilities = get_video_model_capabilities(service)
     client = build_video_client(service, capabilities)
-    request = VideoGenerationRequest(script=script, image_url=image_url, resolution=select_video_resolution(service, capabilities), aspect_ratio="9:16", generate_audio=False)
+    request = VideoGenerationRequest(
+        script=script,
+        image_url=image_url,
+        resolution=select_video_resolution(service, capabilities),
+        aspect_ratio="9:16",
+        generate_audio=False,
+        influencer_image_url=influencer_image_url,
+    )
     retries = service.get_runtime_settings().video_generation_retries if service else 1
     return VideoValidationPipeline(generate_video=lambda pipeline_request, _attempt: client.generate_video(pipeline_request), publish_video=publish_validated_video, max_retries=retries).run(request)
 

@@ -62,6 +62,7 @@ class VideoApiTests(unittest.TestCase):
                 "compliance_notes": {"avoid": [], "focus": []},
             },
             image_url="https://example.com/product.jpg",
+            influencer_image_url="https://example.com/influencer.jpg",
         )
 
         result = generate_video(body)
@@ -74,6 +75,10 @@ class VideoApiTests(unittest.TestCase):
         self.assertEqual(result["attempts"], 1)
         pipeline_request = pipeline_class.return_value.run.call_args.args[0]
         self.assertEqual(pipeline_request.image_url, "https://example.com/product.jpg")
+        self.assertEqual(
+            pipeline_request.influencer_image_url,
+            "https://example.com/influencer.jpg",
+        )
         self.assertIs(
             pipeline_class.call_args.kwargs["publish_video"],
             publish_validated_video,
