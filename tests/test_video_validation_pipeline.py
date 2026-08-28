@@ -97,7 +97,7 @@ class VideoValidationPipelineTests(unittest.TestCase):
         self.assertEqual(published_paths, [("generated.mp4", "job-1")])
 
     def test_regenerates_when_downloaded_video_fails_validation(self):
-        metadata = iter([VideoMetadata(1280, 720, 8.0), VideoMetadata(720, 1280, 8.0)])
+        metadata = iter([VideoMetadata(720, 1280, 7.0), VideoMetadata(720, 1280, 8.0)])
         attempts = []
 
         pipeline = VideoValidationPipeline(
@@ -118,6 +118,31 @@ class VideoValidationPipelineTests(unittest.TestCase):
         self.assertEqual(result.attempts, 2)
         self.assertEqual(result.video_url, "https://example.com/video-2.mp4")
         self.assertEqual(attempts, [1, 2])
+
+    def test_stops_without_retry_when_aspect_ratio_is_invalid(self):
+        attempts = []
+
+        pipeline = VideoValidationPipeline(
+            generate_video=lambda _request, attempt: (
+                attempts.append(attempt) or VideoGenerationResult(
+                    job_id=f"job-{attempt}",
+                    status="completed",
+                    video_url=f"https://example.com/video-{attempt}.mp4",
+                    cost=1.0,
+                )
+            ),
+            download_video=lambda _url, destination: Path(destination).write_bytes(b"video"),
+            read_metadata=lambda _path: VideoMetadata(960, 960, 8.0),
+            max_retries=1,
+        )
+
+        result = pipeline.run(VideoGenerationRequest(SCRIPT, "https://example.com/product.jpg"))
+
+        self.assertEqual(result.status, PipelineStatus.RETRY_EXHAUSTED)
+        self.assertEqual(result.attempts, 1)
+        self.assertEqual(result.total_cost, 1.0)
+        self.assertEqual(attempts, [1])
+        self.assertIn("aspect_ratio", result.validation.errors)
 
     def test_fails_completed_flow_when_local_publish_fails(self):
         pipeline = VideoValidationPipeline(

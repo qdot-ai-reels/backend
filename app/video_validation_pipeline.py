@@ -113,6 +113,18 @@ class VideoValidationPipeline:
                         download_url=(published.download_url if published else None),
                     )
 
+                # A wrong output shape cannot be fixed by repeating the same request.
+                # Stop before another paid generation attempt is submitted.
+                if "aspect_ratio" in last_validation.errors:
+                    return PipelineResult(
+                        status=PipelineStatus.RETRY_EXHAUSTED,
+                        attempts=attempt,
+                        job_id=last_job_id,
+                        video_url=last_url,
+                        validation=last_validation,
+                        total_cost=total_cost,
+                    )
+
         assert last_validation is not None
         return PipelineResult(
             status=PipelineStatus.RETRY_EXHAUSTED,
