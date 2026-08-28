@@ -2,7 +2,7 @@ import os
 import re
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
@@ -34,7 +34,7 @@ class VideoGenerationBody(BaseModel):
     image_url: str = Field(min_length=1)
     influencer_image_url: str = Field(min_length=1)
     resolution: str | None = None
-    aspect_ratio: str = "9:16"
+    aspect_ratio: Literal["9:16"] = "9:16"
     generate_audio: bool = False
 
 
@@ -93,6 +93,20 @@ def generate_video(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(error),
         ) from error
+
+    if result.status != "completed":
+        failed_checks = [
+            name
+            for name, check in result.validation.checks.items()
+            if not check.get("passed")
+        ]
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "생성된 영상이 필수 검증을 통과하지 못했습니다. "
+                f"실패한 검증: {', '.join(failed_checks) or 'unknown'}"
+            ),
+        )
 
     return {
         "job_id": result.job_id,

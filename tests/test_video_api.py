@@ -3,6 +3,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+from pydantic import ValidationError
+
 from app.api.v1.video import (
     LOCAL_VIDEO_OUTPUT_DIR,
     VideoGenerationBody,
@@ -16,6 +18,15 @@ from app.video_validation_pipeline import PipelineResult, PipelineStatus
 
 
 class VideoApiTests(unittest.TestCase):
+    def test_only_accepts_vertical_nine_by_sixteen_requests(self):
+        with self.assertRaises(ValidationError):
+            VideoGenerationBody(
+                script={"scenes": [{"time_range_sec": {"start": 0, "end": 8}}]},
+                image_url="https://example.com/product.jpg",
+                influencer_image_url="https://example.com/influencer.jpg",
+                aspect_ratio="1:1",
+            )
+
     @patch("app.api.v1.video.VideoValidationPipeline")
     @patch("app.api.v1.video.get_video_model_capabilities")
     @patch("app.api.v1.video.build_video_client")
