@@ -38,6 +38,20 @@ SCRIPT = {
     "compliance_notes": {"avoid": [], "focus": []},
 }
 
+CURRENT_SCRIPT = {
+    "meta": {"output_format_version": "1.0", "language": "ko"},
+    "product": {"usp": "스파우트 30포 구성"},
+    "customer": {"main_target": "보호자", "pain_point": "상품 선택 고민"},
+    "ads": {"goal": "상품 소개", "cta_action": "상품 확인"},
+    "video": {
+        "video_duration": "15초",
+        "required_scenes_elements": "상품 라벨",
+        "forbidden_scenes_elements": "허위 효능",
+    },
+    "etc": {"additional_information": None, "video_ads_methodology": "Hook-Body-CTA"},
+    "scenes": SCRIPT["scenes"],
+}
+
 
 class FakeResponse:
     def __init__(self, payload):
@@ -73,6 +87,13 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertIn("상품을 화면 중앙에 보여준다.", prompt)
         self.assertIn("상품 소개", prompt)
         self.assertIn("9:16", prompt)
+
+    def test_includes_full_script_context_in_video_prompt(self):
+        prompt = build_video_prompt(CURRENT_SCRIPT)
+
+        self.assertIn("스파우트 30포 구성", prompt)
+        self.assertIn("상품 라벨", prompt)
+        self.assertIn("Hook-Body-CTA", prompt)
 
     def test_submits_video_job_and_polls_until_completed(self):
         opener = SequentialOpener([
@@ -165,10 +186,47 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertNotIn("frame_images", request_body)
         self.assertEqual(
             [item["image_url"]["url"] for item in request_body["input_references"]],
-            ["https://example.com/product.jpg", "https://example.com/influencer.jpg"],
+            ["https://example.com/influencer.jpg", "https://example.com/product.jpg"],
         )
         self.assertIn("Image 1", request_body["prompt"])
         self.assertIn("Image 2", request_body["prompt"])
+        self.assertIn("Image 1 as the AI influencer reference", request_body["prompt"])
+        self.assertIn("Image 2 as the main product reference", request_body["prompt"])
+
+    def test_submits_all_product_detail_images_after_influencer_and_main_image(self):
+        opener = SequentialOpener([
+            {"id": "job-1", "polling_url": "https://example.com/poll/job-1"},
+            {"id": "job-1", "status": "completed", "unsigned_urls": ["https://example.com/video.mp4"]},
+        ])
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            opener=opener,
+            sleeper=lambda _seconds: None,
+            image_dimensions_reader=self.image_dimensions_reader,
+        )
+
+        client.generate_video(
+            VideoGenerationRequest(
+                script=SCRIPT,
+                image_url="https://example.com/product.jpg",
+                influencer_image_url="https://example.com/influencer.jpg",
+                detail_image_urls=(
+                    "https://example.com/detail-1.jpg",
+                    "https://example.com/detail-2.jpg",
+                ),
+            )
+        )
+
+        request_body = json.loads(opener.requests[0].data)
+        self.assertEqual(
+            [item["image_url"]["url"] for item in request_body["input_references"]],
+            [
+                "https://example.com/influencer.jpg",
+                "https://example.com/product.jpg",
+                "https://example.com/detail-1.jpg",
+                "https://example.com/detail-2.jpg",
+            ],
+        )
 
     def test_raises_when_video_job_fails(self):
         opener = SequentialOpener([
