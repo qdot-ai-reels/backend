@@ -113,6 +113,27 @@ class OpenRouterRequestError(OpenRouterError):
         self.status_code = status_code
 
 
+def _http_error_detail(error: HTTPError) -> str:
+    """Extract a short, non-sensitive provider error summary for diagnostics."""
+    try:
+        raw_body = error.read().decode("utf-8", errors="replace")
+        payload = json.loads(raw_body)
+    except (OSError, JSONDecodeError, UnicodeDecodeError):
+        return ""
+
+    provider_error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(provider_error, dict):
+        fields = []
+        for key in ("code", "message", "type"):
+            value = provider_error.get(key)
+            if isinstance(value, str) and value.strip():
+                fields.append(f"{key}={value.strip()[:300]}")
+        return ", ".join(fields)
+    if isinstance(provider_error, str):
+        return provider_error.strip()[:300]
+    return ""
+
+
 class ScriptValidationError(OpenRouterError):
     """Raised when the model response is not a usable script document."""
 
@@ -525,8 +546,10 @@ class OpenRouterClient:
             with self.opener(http_request, timeout=self.timeout_seconds) as response:
                 response_body = json.loads(response.read().decode("utf-8"))
         except HTTPError as error:
+            detail = _http_error_detail(error)
+            suffix = f": {detail}" if detail else ""
             raise OpenRouterRequestError(
-                f"OpenRouter 요청이 거부되었습니다. HTTP {error.code}",
+                f"OpenRouter 요청이 거부되었습니다. HTTP {error.code}{suffix}",
                 status_code=error.code,
             ) from error
         except URLError as error:

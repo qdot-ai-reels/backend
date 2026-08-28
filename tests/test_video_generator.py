@@ -87,7 +87,7 @@ class VideoGeneratorTests(unittest.TestCase):
         ])
         client = OpenRouterVideoClient(
             api_key="test-key",
-            model="google/veo-3.1-lite",
+            model="bytedance/seedance-2.0-mini",
             opener=opener,
             sleeper=lambda _seconds: None,
             image_dimensions_reader=self.image_dimensions_reader,
@@ -103,7 +103,43 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertEqual(request_body["duration"], 8)
         self.assertEqual(request_body["aspect_ratio"], "9:16")
         self.assertFalse(request_body["generate_audio"])
+        self.assertEqual(
+            request_body["input_references"][0]["image_url"]["url"],
+            "https://example.com/product.jpg",
+        )
+        self.assertNotIn("frame_images", request_body)
+
+    def test_uses_frame_image_for_veo_model(self):
+        opener = SequentialOpener([
+            {"id": "job-1", "polling_url": "https://example.com/poll/job-1"},
+            {
+                "id": "job-1",
+                "status": "completed",
+                "unsigned_urls": ["https://example.com/video.mp4"],
+            },
+        ])
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            model="google/veo-3.1-lite",
+            opener=opener,
+            sleeper=lambda _seconds: None,
+            image_dimensions_reader=self.image_dimensions_reader,
+        )
+
+        client.generate_video(
+            VideoGenerationRequest(
+                script=SCRIPT,
+                image_url="https://example.com/product.jpg",
+            )
+        )
+
+        request_body = json.loads(opener.requests[0].data)
+        self.assertEqual(
+            request_body["frame_images"][0]["image_url"]["url"],
+            "https://example.com/product.jpg",
+        )
         self.assertEqual(request_body["frame_images"][0]["frame_type"], "first_frame")
+        self.assertNotIn("input_references", request_body)
 
     def test_submits_product_and_influencer_as_reference_images(self):
         opener = SequentialOpener([
@@ -147,8 +183,52 @@ class VideoGeneratorTests(unittest.TestCase):
             image_dimensions_reader=self.image_dimensions_reader,
         )
 
-        with self.assertRaises(VideoGenerationError):
+        with self.assertRaisesRegex(VideoGenerationError, "provider failed"):
             client.generate_video(VideoGenerationRequest(script=SCRIPT, image_url="https://example.com/product.jpg"))
+
+    def test_preserves_string_error_when_video_job_fails(self):
+        opener = SequentialOpener([
+            {"id": "job-1", "polling_url": "https://example.com/poll/job-1", "status": "pending"},
+            {"id": "job-1", "status": "FAILED", "error": "provider temporarily unavailable"},
+        ])
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            model="bytedance/seedance-2.0-mini",
+            opener=opener,
+            sleeper=lambda _seconds: None,
+            image_dimensions_reader=self.image_dimensions_reader,
+        )
+
+        with self.assertRaisesRegex(
+            VideoGenerationError,
+            "provider temporarily unavailable",
+        ):
+            client.generate_video(
+                VideoGenerationRequest(
+                    script=SCRIPT,
+                    image_url="https://example.com/product.jpg",
+                )
+            )
+
+    def test_falls_back_to_status_when_failed_video_has_no_error_detail(self):
+        opener = SequentialOpener([
+            {"id": "job-1", "polling_url": "https://example.com/poll/job-1", "status": "pending"},
+            {"id": "job-1", "status": "failed"},
+        ])
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            opener=opener,
+            sleeper=lambda _seconds: None,
+            image_dimensions_reader=self.image_dimensions_reader,
+        )
+
+        with self.assertRaisesRegex(VideoGenerationError, "failed"):
+            client.generate_video(
+                VideoGenerationRequest(
+                    script=SCRIPT,
+                    image_url="https://example.com/product.jpg",
+                )
+            )
 
     def test_uses_last_scene_end_as_video_duration(self):
         opener = SequentialOpener([
