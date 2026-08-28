@@ -67,7 +67,9 @@ def build_video_prompt(
 
     reference_instruction = (
         "Use Image 1 as the product reference and Image 2 as the AI influencer reference. "
-        "Have the AI influencer appear and promote the product while preserving the "
+        "The AI influencer must be clearly visible on screen and actively promote the "
+        "product in the generated video; do not replace the influencer with only a hand, "
+        "finger, or an off-screen action. Preserve the "
         "influencer's identity and the product's shape, label, colors, and text. "
         if has_influencer_image
         else "Use the provided product image as the visual reference and preserve the product shape, label, colors, and text. "
