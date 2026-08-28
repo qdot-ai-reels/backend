@@ -1,6 +1,5 @@
 import os
 import re
-import shutil
 from pathlib import Path
 from typing import Any, Literal
 
@@ -9,6 +8,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.script_generator import OpenRouterRequestError
+from app.media_combiner import remove_audio_track
 from app.video_generator import (
     OpenRouterVideoClient,
     VideoGenerationError,
@@ -131,7 +131,7 @@ def publish_validated_video(
     safe_job_id = re.sub(r"[^A-Za-z0-9._-]", "_", generated.job_id).strip("._") or "job"
     output_path = LOCAL_VIDEO_OUTPUT_DIR / safe_job_id / "final.mp4"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(video_path, output_path)
+    remove_audio_track(video_path, output_path)
     file_url = f"/api/v1/reels/video/{safe_job_id}/file"
     return PublishedVideoArtifact(
         storage_path=str(output_path),
