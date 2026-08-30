@@ -87,6 +87,39 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertEqual(client.poll_interval_seconds, 5.0)
         self.assertEqual(client.max_poll_attempts, 120)
 
+    def test_background_poll_window_can_wait_thirty_minutes(self):
+        class NeverCompletesOpener:
+            def __init__(self):
+                self.requests = []
+
+            def __call__(self, request, timeout):
+                self.requests.append(request)
+                if len(self.requests) == 1:
+                    return FakeResponse({
+                        "id": "job-1",
+                        "polling_url": "https://example.com/poll/job-1",
+                    })
+                return FakeResponse({"id": "job-1", "status": "pending"})
+
+        opener = NeverCompletesOpener()
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            max_poll_attempts=360,
+            opener=opener,
+            sleeper=lambda _seconds: None,
+            image_dimensions_reader=self.image_dimensions_reader,
+        )
+
+        with self.assertRaisesRegex(VideoGenerationError, "polling 시간이 초과"):
+            client.generate_video(
+                VideoGenerationRequest(
+                    script=SCRIPT,
+                    image_url="https://example.com/product.jpg",
+                )
+            )
+
+        self.assertEqual(len(opener.requests), 361)
+
     def test_builds_prompt_from_script_scenes(self):
         prompt = build_video_prompt(SCRIPT)
 
