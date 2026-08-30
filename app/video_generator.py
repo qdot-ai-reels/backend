@@ -29,6 +29,10 @@ class VideoGenerationError(RuntimeError):
     """Raised when a video generation job cannot be completed."""
 
 
+class VideoGenerationTimeoutError(VideoGenerationError):
+    """Raised when provider polling exceeds the configured wait window."""
+
+
 @dataclass(frozen=True)
 class VideoGenerationRequest:
     script: Mapping[str, Any]
@@ -262,7 +266,7 @@ class OpenRouterVideoClient:
                     f"{_video_failure_message(result, status)}"
                 )
 
-        raise VideoGenerationError("영상 생성 polling 시간이 초과되었습니다.")
+        raise VideoGenerationTimeoutError("영상 생성 polling 시간이 초과되었습니다.")
 
     @staticmethod
     def _image_reference(image_url: str) -> dict[str, Any]:

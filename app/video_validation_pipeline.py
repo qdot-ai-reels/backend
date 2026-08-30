@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.request import Request, urlopen
 
-from app.video_generator import VideoGenerationRequest, VideoGenerationResult
+from app.video_generator import (
+    VideoGenerationRequest,
+    VideoGenerationResult,
+    VideoGenerationTimeoutError,
+)
 from app.video_metadata import read_video_metadata
 from app.video_validator import ValidationPolicy, ValidationResult, validate_video
 
@@ -75,7 +79,12 @@ class VideoValidationPipeline:
         total_cost = 0.0
 
         for attempt in range(1, self.max_retries + 2):
-            generated = self.generate_video(request, attempt)
+            try:
+                generated = self.generate_video(request, attempt)
+            except VideoGenerationTimeoutError:
+                if attempt == self.max_retries + 1:
+                    raise
+                continue
             last_url = generated.video_url
             last_job_id = generated.job_id
             total_cost += generated.cost or 0.0

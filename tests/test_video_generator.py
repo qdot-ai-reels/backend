@@ -5,6 +5,7 @@ from app.video_generator import (
     VideoGenerationRequest,
     VideoGenerationResult,
     VideoGenerationError,
+    VideoGenerationTimeoutError,
     OpenRouterVideoClient,
     build_video_prompt,
 )
@@ -110,7 +111,7 @@ class VideoGeneratorTests(unittest.TestCase):
             image_dimensions_reader=self.image_dimensions_reader,
         )
 
-        with self.assertRaisesRegex(VideoGenerationError, "polling 시간이 초과"):
+        with self.assertRaisesRegex(VideoGenerationTimeoutError, "polling 시간이 초과"):
             client.generate_video(
                 VideoGenerationRequest(
                     script=SCRIPT,
