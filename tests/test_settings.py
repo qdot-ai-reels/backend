@@ -64,6 +64,21 @@ class SettingsServiceTests(unittest.TestCase):
         self.assertEqual((tts_settings.api_key, tts_settings.model), ("tts-key", "tts-model"))
         self.assertEqual((video_client.api_key, video_client.model), ("video-key", "video-model"))
 
+    def test_video_client_accepts_background_poll_limit(self):
+        client = build_video_client(
+            capabilities=VideoModelCapabilities(
+                model_id="video-model",
+                name="Video",
+                supported_durations=(15,),
+                supported_aspect_ratios=("9:16",),
+                supported_resolutions=("720p",),
+                generate_audio=False,
+            ),
+            max_poll_attempts=360,
+        )
+
+        self.assertEqual(client.max_poll_attempts, 360)
+
     def test_api_key_is_encrypted_and_never_returned(self):
         repository = InMemorySettingsRepository()
         service = SettingsService(repository, encryption_key=SettingsService.test_key())

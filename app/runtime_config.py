@@ -77,6 +77,7 @@ def resolve_script_generation_duration(
 def build_video_client(
     service: SettingsService | None = None,
     capabilities: VideoModelCapabilities | None = None,
+    max_poll_attempts: int | None = None,
 ) -> OpenRouterVideoClient:
     environment_client = OpenRouterVideoClient.from_env()
     api_key = environment_client.api_key
@@ -89,25 +90,31 @@ def build_video_client(
         if capabilities is None:
             supported_resolutions = (persisted.video_max_resolution,)
 
-    return OpenRouterVideoClient(
-        api_key=api_key,
-        model=model,
-        api_url=environment_client.api_url,
-        supported_durations=(
+    client_kwargs = {
+        "api_key": api_key,
+        "model": model,
+        "api_url": environment_client.api_url,
+        "supported_durations": (
             capabilities.supported_durations
             if capabilities
             else environment_client.supported_durations
         ),
-        supported_aspect_ratios=(
+        "supported_aspect_ratios": (
             capabilities.supported_aspect_ratios
             if capabilities
             else environment_client.supported_aspect_ratios
         ),
-        supported_resolutions=(
+        "supported_resolutions": (
             capabilities.supported_resolutions
             if capabilities
             else supported_resolutions
         ),
+    }
+    if max_poll_attempts is not None:
+        client_kwargs["max_poll_attempts"] = max_poll_attempts
+
+    return OpenRouterVideoClient(
+        **client_kwargs,
     )
 
 

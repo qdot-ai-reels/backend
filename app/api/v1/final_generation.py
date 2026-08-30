@@ -34,6 +34,11 @@ from app.video_validation_pipeline import VideoValidationPipeline
 
 router = APIRouter()
 LOCAL_COMBINED_OUTPUT_DIR = Path(os.getenv("COMBINED_VIDEO_OUTPUT_DIR", "runtime/combined"))
+BACKGROUND_VIDEO_MAX_WAIT_SECONDS = 30 * 60
+VIDEO_POLL_INTERVAL_SECONDS = 5
+BACKGROUND_VIDEO_MAX_POLL_ATTEMPTS = (
+    BACKGROUND_VIDEO_MAX_WAIT_SECONDS // VIDEO_POLL_INTERVAL_SECONDS
+)
 
 
 class FinalGenerationBody(BaseModel):
@@ -169,7 +174,11 @@ def _generate_video(
     service: SettingsService | None,
 ):
     capabilities = get_video_model_capabilities(service)
-    client = build_video_client(service, capabilities)
+    client = build_video_client(
+        service,
+        capabilities,
+        max_poll_attempts=BACKGROUND_VIDEO_MAX_POLL_ATTEMPTS,
+    )
     request = VideoGenerationRequest(
         script=script,
         image_url=image_url,
