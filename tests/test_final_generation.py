@@ -5,10 +5,19 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from app.api.v1.final_generation import FinalGenerationBody, router
+from app.api.v1.final_generation import (
+    BACKGROUND_VIDEO_MAX_POLL_ATTEMPTS,
+    BACKGROUND_VIDEO_MAX_WAIT_SECONDS,
+    FinalGenerationBody,
+    router,
+)
 
 
 class FinalGenerationApiTests(unittest.TestCase):
+    def test_background_video_wait_is_thirty_minutes(self):
+        self.assertEqual(BACKGROUND_VIDEO_MAX_WAIT_SECONDS, 30 * 60)
+        self.assertEqual(BACKGROUND_VIDEO_MAX_POLL_ATTEMPTS, 360)
+
     def test_accepts_original_product_json(self):
         body = FinalGenerationBody(
             product={
