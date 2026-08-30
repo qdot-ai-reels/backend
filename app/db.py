@@ -29,7 +29,7 @@ class GlobalSettingsRow(Base):
     video_max_resolution: Mapped[str] = mapped_column(String(32), default="1080p")
     video_max_duration_seconds: Mapped[int] = mapped_column(Integer, default=15)
     script_generation_retries: Mapped[int] = mapped_column(Integer, default=2)
-    video_generation_retries: Mapped[int] = mapped_column(Integer, default=1)
+    video_generation_retries: Mapped[int] = mapped_column(Integer, default=2)
     media_combine_retries: Mapped[int] = mapped_column(Integer, default=3)
     mute_original_audio: Mapped[bool] = mapped_column(default=True)
     updated_at: Mapped[datetime] = mapped_column(
@@ -87,7 +87,7 @@ def init_db() -> None:
         "video_min_resolution": ("VARCHAR(32)", "'720p'"),
         "video_max_resolution": ("VARCHAR(32)", "'1080p'"),
         "script_generation_retries": ("INTEGER", "2"),
-        "video_generation_retries": ("INTEGER", "1"),
+        "video_generation_retries": ("INTEGER", "2"),
         "media_combine_retries": ("INTEGER", "3"),
         "openrouter_tts_voice": ("VARCHAR(255)", "''"),
     }
@@ -128,6 +128,14 @@ def init_db() -> None:
                         f"{column_type} NOT NULL DEFAULT {default}"
                     )
                 )
+
+        # Upgrade the previous default retry count for existing local databases.
+        connection.execute(
+            text(
+                "UPDATE global_settings SET video_generation_retries = 2 "
+                "WHERE video_generation_retries = 1"
+            )
+        )
 
         if "video_resolution" in columns and "video_max_resolution" not in columns:
             connection.execute(

@@ -179,7 +179,7 @@ def _generate_video(
         influencer_image_url=influencer_image_url,
         detail_image_urls=detail_image_urls,
     )
-    retries = service.get_runtime_settings().video_generation_retries if service else 1
+    retries = service.get_runtime_settings().video_generation_retries if service else 2
     return VideoValidationPipeline(generate_video=lambda pipeline_request, _attempt: client.generate_video(pipeline_request), publish_video=publish_validated_video, max_retries=retries).run(request)
 
 

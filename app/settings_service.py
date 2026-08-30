@@ -36,7 +36,7 @@ class GlobalSettings:
     video_max_resolution: str = "1080p"
     video_max_duration_seconds: int = 15
     script_generation_retries: int = 2
-    video_generation_retries: int = 1
+    video_generation_retries: int = 2
     media_combine_retries: int = 3
     mute_original_audio: bool = True
 

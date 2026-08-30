@@ -75,7 +75,7 @@ def generate_video(
             )
         client = build_video_client(service, capabilities)
         max_retries = (
-            service.get_runtime_settings().video_generation_retries if service else 1
+            service.get_runtime_settings().video_generation_retries if service else 2
         )
         result = VideoValidationPipeline(
             generate_video=lambda pipeline_request, _attempt: client.generate_video(
