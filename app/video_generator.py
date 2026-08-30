@@ -125,7 +125,6 @@ class OpenRouterVideoClient:
         api_url: str = DEFAULT_VIDEO_API_URL,
         timeout_seconds: int = 120,
         poll_interval_seconds: float = 5.0,
-        # Video generation can take several minutes even after the job is accepted.
         # Poll every 5 seconds for up to 10 minutes before failing the job.
         max_poll_attempts: int = 120,
         supported_durations: tuple[int, ...] = DEFAULT_SUPPORTED_DURATIONS,

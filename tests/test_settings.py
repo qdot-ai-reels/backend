@@ -112,7 +112,7 @@ class SettingsServiceTests(unittest.TestCase):
         self.assertEqual(public.video_max_resolution, "1080p")
         self.assertEqual(public.video_max_duration_seconds, 15)
         self.assertEqual(public.script_generation_retries, 2)
-        self.assertEqual(public.video_generation_retries, 1)
+        self.assertEqual(public.video_generation_retries, 2)
         self.assertEqual(public.media_combine_retries, 3)
 
     def test_sqlalchemy_repository_persists_one_global_record(self):
@@ -380,7 +380,7 @@ class DatabaseLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     "FROM global_settings WHERE id = 1"
                 )
             ).one()
-        self.assertEqual(tuple(row), ("720p", "720p", 4, 1, 3))
+        self.assertEqual(tuple(row), ("720p", "720p", 4, 2, 3))
 
 
 class SettingsHttpTests(unittest.TestCase):

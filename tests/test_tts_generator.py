@@ -199,6 +199,37 @@ class TTSGeneratorTests(unittest.TestCase):
         self.assertEqual(context.exception.expected_seconds, 3.0)
         self.assertEqual(context.exception.actual_seconds, 3.2)
 
+    def test_retries_tts_generation_up_to_five_times(self):
+        attempts = []
+        durations = iter([3.2, 1.0, 1.0, 1.0, 8.0])
+
+        def synthesize(text):
+            attempts.append(text)
+            return b"audio"
+
+        client = OpenRouterTTSClient(
+            synthesizer=synthesize,
+            combiner=lambda _scenes: b"combined",
+            duration_reader=lambda _audio: next(durations),
+        )
+
+        self.assertEqual(client.generate_narration(SCRIPT), b"combined")
+        self.assertEqual(len(attempts), 4)
+        self.assertEqual(client.max_retries, 5)
+
+    def test_raises_after_five_tts_retries_are_exhausted(self):
+        calls = []
+        client = OpenRouterTTSClient(
+            synthesizer=lambda text: calls.append(text) or b"audio",
+            combiner=lambda _scenes: b"should-not-be-called",
+            duration_reader=lambda _audio: 3.2,
+        )
+
+        with self.assertRaises(SceneAudioDurationError):
+            client.generate_narration(SCRIPT)
+
+        self.assertEqual(len(calls), 6)
+
     def test_does_not_duplicate_script_dialogue_validation_in_tts(self):
         calls = []
         durations = iter([0.5, 1.0])
@@ -225,6 +256,7 @@ class TTSGeneratorTests(unittest.TestCase):
             synthesizer=lambda _text: b"scene-audio",
             combiner=lambda _scenes: b"combined-audio",
             duration_reader=lambda _audio: next(durations),
+            max_retries=0,
         )
 
         with self.assertRaises(CombinedAudioDurationError) as context:

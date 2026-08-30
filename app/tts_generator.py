@@ -149,18 +149,35 @@ class OpenRouterTTSClient:
         combiner: Callable[[Sequence[SceneNarration]], bytes] | None = None,
         duration_reader: Callable[[bytes], float] | None = None,
         duration_tolerance_seconds: float = 0.1,
+        max_retries: int = 5,
         settings: OpenRouterTTSSettings | None = None,
     ) -> None:
         if duration_tolerance_seconds < 0:
             raise ValueError("duration_tolerance_seconds는 0 이상이어야 합니다.")
+        if max_retries < 0:
+            raise ValueError("max_retries는 0 이상이어야 합니다.")
         self.settings = settings or OpenRouterTTSSettings.from_env()
         self.synthesizer = synthesizer or self._create_openrouter_synthesizer()
         self.combiner = combiner or combine_scene_audio
         self.duration_reader = duration_reader or read_audio_duration
         self.duration_tolerance_seconds = duration_tolerance_seconds
+        self.max_retries = max_retries
 
     def generate_narration(self, script: Mapping[str, Any]) -> bytes:
         scene_narrations = build_scene_narrations(script)
+        last_error: TTSGenerationError | None = None
+        for _attempt in range(self.max_retries + 1):
+            try:
+                return self._generate_narration_once(scene_narrations)
+            except TTSGenerationError as error:
+                last_error = error
+
+        assert last_error is not None
+        raise last_error
+
+    def _generate_narration_once(
+        self, scene_narrations: Sequence[SceneNarration]
+    ) -> bytes:
         generated = []
         for narration in scene_narrations:
             if not narration.text:
