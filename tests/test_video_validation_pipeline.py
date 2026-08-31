@@ -3,7 +3,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.video_generator import VideoGenerationRequest, VideoGenerationResult
+from app.video_generator import (
+    VideoGenerationRequest,
+    VideoGenerationResult,
+    VideoGenerationTimeoutError,
+)
 from app.video_validation_pipeline import (
     PipelineStatus,
     PublishedVideoArtifact,
@@ -38,6 +42,32 @@ SCRIPT = {
 
 
 class VideoValidationPipelineTests(unittest.TestCase):
+    def test_retries_video_generation_timeout(self):
+        attempts = []
+
+        def generate_video(_request, attempt):
+            attempts.append(attempt)
+            if attempt < 3:
+                raise VideoGenerationTimeoutError("polling timeout")
+            return VideoGenerationResult(
+                job_id="job-3",
+                status="completed",
+                video_url="https://example.com/video-3.mp4",
+            )
+
+        pipeline = VideoValidationPipeline(
+            generate_video=generate_video,
+            download_video=lambda _url, destination: Path(destination).write_bytes(b"video"),
+            read_metadata=lambda _path: VideoMetadata(720, 1280, 8.0),
+            max_retries=2,
+        )
+
+        result = pipeline.run(VideoGenerationRequest(SCRIPT, "https://example.com/product.jpg"))
+
+        self.assertEqual(result.status, PipelineStatus.COMPLETED)
+        self.assertEqual(result.attempts, 3)
+        self.assertEqual(attempts, [1, 2, 3])
+
     def test_returns_completed_when_downloaded_video_passes_validation(self):
         generated_urls = []
 

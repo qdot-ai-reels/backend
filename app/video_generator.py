@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -23,10 +24,30 @@ from app.script_generator import (
 DEFAULT_VIDEO_API_URL = "https://openrouter.ai/api/v1/videos"
 DEFAULT_VIDEO_MODEL = "bytedance/seedance-2.0-mini"
 DEFAULT_SUPPORTED_DURATIONS = tuple(range(4, 16))
+logger = logging.getLogger(__name__)
 
 
 class VideoGenerationError(RuntimeError):
     """Raised when a video generation job cannot be completed."""
+
+
+class VideoGenerationTimeoutError(VideoGenerationError):
+    """Raised when provider polling exceeds the configured wait window."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        job_id: str | None = None,
+        last_status: str | None = None,
+        poll_count: int | None = None,
+        elapsed_seconds: float | None = None,
+    ) -> None:
+        self.job_id = job_id
+        self.last_status = last_status
+        self.poll_count = poll_count
+        self.elapsed_seconds = elapsed_seconds
+        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -59,11 +80,8 @@ def build_video_prompt(
         time_range = scene["time_range_sec"]
         start = time_range["start"]
         end = time_range["end"]
-        auditory = scene.get("auditory") or {}
         scene_lines.append(
-            f"{start}-{end}초: 화면={scene.get('visual', '')}; "
-            f"자막={auditory.get('subtitle', '')}; "
-            f"내레이션={auditory.get('voiceover', '')}"
+            f"{start}-{end}초: 화면={scene.get('visual', '')}"
         )
 
     reference_instruction = (
@@ -80,6 +98,8 @@ def build_video_prompt(
         "Create a vertical product advertisement video. "
         + reference_instruction
         + "Use a 9:16 aspect ratio, clean lighting, and simple transitions. "
+        "Do not add subtitles, captions, prices, discounts, CTA text, or dialogue. "
+        "Text animation will be added separately after video generation. "
         "Do not add unsupported product claims, extra products, new logos, "
         "or distorted text. Follow these script scenes:\n"
         + "Script context:\n"
@@ -125,8 +145,8 @@ class OpenRouterVideoClient:
         api_url: str = DEFAULT_VIDEO_API_URL,
         timeout_seconds: int = 120,
         poll_interval_seconds: float = 5.0,
-        # Poll every 5 seconds for up to 10 minutes before failing the job.
-        max_poll_attempts: int = 120,
+        # Poll every 5 seconds for up to 6 minutes before failing the job.
+        max_poll_attempts: int = 72,
         supported_durations: tuple[int, ...] = DEFAULT_SUPPORTED_DURATIONS,
         supported_aspect_ratios: tuple[str, ...] = ("9:16",),
         supported_resolutions: tuple[str, ...] = ("480p", "720p"),
@@ -239,12 +259,42 @@ class OpenRouterVideoClient:
         if not job_id or not polling_url:
             raise VideoGenerationError("영상 생성 응답에 id 또는 polling_url이 없습니다.")
 
+        started_at = time.monotonic()
+        logger.info(
+            "video generation submitted: job_id=%s model=%s duration=%ss "
+            "resolution=%s aspect_ratio=%s",
+            job_id,
+            self.model,
+            duration_seconds,
+            request.resolution,
+            request.aspect_ratio,
+        )
+
         for attempt in range(self.max_poll_attempts):
             if attempt > 0:
                 self.sleeper(self.poll_interval_seconds)
-            result = self._request_json(method="GET", url=polling_url)
+            try:
+                result = self._request_json(method="GET", url=polling_url)
+            except Exception:
+                logger.exception(
+                    "video generation polling request failed: job_id=%s poll=%s "
+                    "elapsed=%.2fs",
+                    job_id,
+                    attempt + 1,
+                    time.monotonic() - started_at,
+                )
+                raise
             raw_status = result.get("status")
             status = raw_status.lower() if isinstance(raw_status, str) else raw_status
+            logger.info(
+                "video generation polling: job_id=%s poll=%s/%s status=%s "
+                "elapsed=%.2fs",
+                job_id,
+                attempt + 1,
+                self.max_poll_attempts,
+                status or "unknown",
+                time.monotonic() - started_at,
+            )
             if status == "completed":
                 urls = result.get("unsigned_urls") or []
                 if not urls:
@@ -262,7 +312,25 @@ class OpenRouterVideoClient:
                     f"{_video_failure_message(result, status)}"
                 )
 
-        raise VideoGenerationError("영상 생성 polling 시간이 초과되었습니다.")
+        elapsed_seconds = time.monotonic() - started_at
+        logger.warning(
+            "video generation polling timed out: job_id=%s last_status=%s "
+            "polls=%s elapsed=%.2fs",
+            job_id,
+            status or "unknown",
+            self.max_poll_attempts,
+            elapsed_seconds,
+        )
+        raise VideoGenerationTimeoutError(
+            "영상 생성 polling 시간이 초과되었습니다. "
+            f"job_id={job_id}, 마지막 상태={status or 'unknown'}, "
+            f"polling 횟수={self.max_poll_attempts}, "
+            f"경과 시간={elapsed_seconds:.2f}초",
+            job_id=job_id,
+            last_status=status,
+            poll_count=self.max_poll_attempts,
+            elapsed_seconds=elapsed_seconds,
+        )
 
     @staticmethod
     def _image_reference(image_url: str) -> dict[str, Any]:

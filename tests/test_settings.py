@@ -74,10 +74,10 @@ class SettingsServiceTests(unittest.TestCase):
                 supported_resolutions=("720p",),
                 generate_audio=False,
             ),
-            max_poll_attempts=360,
+            max_poll_attempts=72,
         )
 
-        self.assertEqual(client.max_poll_attempts, 360)
+        self.assertEqual(client.max_poll_attempts, 72)
 
     def test_api_key_is_encrypted_and_never_returned(self):
         repository = InMemorySettingsRepository()
