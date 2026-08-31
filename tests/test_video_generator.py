@@ -8,6 +8,7 @@ from app.video_generator import (
     VideoGenerationTimeoutError,
     OpenRouterVideoClient,
     build_video_prompt,
+    convert_dict_to_formatted_text,
 )
 
 
@@ -138,9 +139,36 @@ class VideoGeneratorTests(unittest.TestCase):
     def test_includes_full_script_context_in_video_prompt(self):
         prompt = build_video_prompt(CURRENT_SCRIPT)
 
-        self.assertIn("스파우트 30포 구성", prompt)
-        self.assertIn("상품 라벨", prompt)
-        self.assertIn("Hook-Body-CTA", prompt)
+        self.assertIn("| Section | Time Range | Visual |", prompt)
+        self.assertIn("| 1 | 0s - 8s | 상품을 화면 중앙에 보여준다. |", prompt)
+        self.assertNotIn("스파우트 30포 구성", prompt)
+        self.assertNotIn("상품 라벨", prompt)
+        self.assertNotIn("Hook-Body-CTA", prompt)
+
+    def test_formats_video_prompt_scenes_as_documented_table(self):
+        formatted = convert_dict_to_formatted_text(CURRENT_SCRIPT)
+
+        self.assertEqual(
+            formatted,
+            "\n".join([
+                "| Section | Time Range | Visual |",
+                "| --- | --- | --- |",
+                "| 1 | 0s - 8s | 상품을 화면 중앙에 보여준다. |",
+            ]),
+        )
+        self.assertNotIn("상품 소개", formatted)
+
+    def test_formats_section_as_scene_number(self):
+        formatted = convert_dict_to_formatted_text({
+            "scenes": [{
+                "section": "Hook",
+                "time_range_sec": {"start": 0, "end": 1},
+                "visual": "장면",
+            }],
+        })
+
+        self.assertIn("| 1 | 0s - 1s | 장면 |", formatted)
+        self.assertNotIn("| Hook |", formatted)
 
     def test_submits_video_job_and_polls_until_completed(self):
         opener = SequentialOpener([
