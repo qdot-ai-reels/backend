@@ -86,7 +86,7 @@ class VideoGeneratorTests(unittest.TestCase):
         client = OpenRouterVideoClient(api_key="test-key")
 
         self.assertEqual(client.poll_interval_seconds, 5.0)
-        self.assertEqual(client.max_poll_attempts, 120)
+        self.assertEqual(client.max_poll_attempts, 72)
 
     def test_background_poll_window_can_wait_thirty_minutes(self):
         class NeverCompletesOpener:
@@ -111,7 +111,9 @@ class VideoGeneratorTests(unittest.TestCase):
             image_dimensions_reader=self.image_dimensions_reader,
         )
 
-        with self.assertRaisesRegex(VideoGenerationTimeoutError, "polling 시간이 초과"):
+        with self.assertRaisesRegex(
+            VideoGenerationTimeoutError, "polling 시간이 초과"
+        ) as context:
             client.generate_video(
                 VideoGenerationRequest(
                     script=SCRIPT,
@@ -120,12 +122,17 @@ class VideoGeneratorTests(unittest.TestCase):
             )
 
         self.assertEqual(len(opener.requests), 361)
+        self.assertEqual(context.exception.job_id, "job-1")
+        self.assertEqual(context.exception.last_status, "pending")
+        self.assertEqual(context.exception.poll_count, 360)
 
     def test_builds_prompt_from_script_scenes(self):
         prompt = build_video_prompt(SCRIPT)
 
         self.assertIn("상품을 화면 중앙에 보여준다.", prompt)
-        self.assertIn("상품 소개", prompt)
+        self.assertNotIn("자막=상품 소개", prompt)
+        self.assertNotIn("내레이션=상품을 소개합니다.", prompt)
+        self.assertIn("Do not add subtitles, captions, prices, discounts, CTA text, or dialogue.", prompt)
         self.assertIn("9:16", prompt)
 
     def test_includes_full_script_context_in_video_prompt(self):
