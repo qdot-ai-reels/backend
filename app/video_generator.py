@@ -74,16 +74,6 @@ def build_video_prompt(
     has_influencer_image: bool = False,
 ) -> str:
     """Convert a validated script document into a video-generation prompt."""
-    scenes = script.get("scenes", [])
-    scene_lines = []
-    for scene in scenes:
-        time_range = scene["time_range_sec"]
-        start = time_range["start"]
-        end = time_range["end"]
-        scene_lines.append(
-            f"{start}-{end}초: 화면={scene.get('visual', '')}"
-        )
-
     reference_instruction = (
         "Use Image 1 as the AI influencer reference and Image 2 as the main product reference. "
         "Use any following images as additional product detail references. "
@@ -102,37 +92,31 @@ def build_video_prompt(
         "Text animation will be added separately after video generation. "
         "Do not add unsupported product claims, extra products, new logos, "
         "or distorted text. Follow these script scenes:\n"
-        + "Script context:\n"
         + convert_dict_to_formatted_text(script)
-        + "\n"
-        + "\n".join(scene_lines)
     )
 
 
 def convert_dict_to_formatted_text(data: Mapping[str, Any]) -> str:
-    """Format non-scene script fields for the video model prompt."""
-    lines: list[str] = []
+    """Format the scene visual instructions as the documented Markdown table."""
+    scenes = data.get("scenes", [])
+    if not isinstance(scenes, list) or not scenes:
+        return ""
 
-    def append_value(value: Any, indent: int) -> None:
-        prefix = "  " * indent
-        if isinstance(value, Mapping):
-            for key, child in value.items():
-                if key == "scenes":
-                    continue
-                if isinstance(child, (Mapping, list)):
-                    lines.append(f"{prefix}- {key}")
-                    append_value(child, indent + 1)
-                else:
-                    lines.append(f"{prefix}- {key}: {child}")
-        elif isinstance(value, list):
-            for child in value:
-                if isinstance(child, (Mapping, list)):
-                    append_value(child, indent)
-                else:
-                    lines.append(f"{prefix}- {child}")
-
-    append_value(data, 0)
-    return "\n".join(lines)
+    rows = [
+        "| Section | Time Range | Visual |",
+        "| --- | --- | --- |",
+    ]
+    for index, scene in enumerate(scenes, start=1):
+        if not isinstance(scene, Mapping):
+            continue
+        time_range = scene.get("time_range_sec", {})
+        if not isinstance(time_range, Mapping):
+            time_range = {}
+        start = time_range.get("start", 0)
+        end = time_range.get("end", 0)
+        visual = str(scene.get("visual", "")).replace("|", "\\|").replace("\n", " ")
+        rows.append(f"| {index} | {start}s - {end}s | {visual} |")
+    return "\n".join(rows)
 
 
 class OpenRouterVideoClient:
