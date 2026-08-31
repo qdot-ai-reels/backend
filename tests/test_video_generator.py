@@ -82,13 +82,13 @@ class VideoGeneratorTests(unittest.TestCase):
     def setUp(self):
         self.image_dimensions_reader = lambda _image_url: (720, 1280)
 
-    def test_defaults_to_ten_minute_video_poll_window(self):
+    def test_defaults_to_six_minute_video_poll_window(self):
         client = OpenRouterVideoClient(api_key="test-key")
 
         self.assertEqual(client.poll_interval_seconds, 5.0)
         self.assertEqual(client.max_poll_attempts, 72)
 
-    def test_background_poll_window_can_wait_thirty_minutes(self):
+    def test_custom_poll_window_reports_timeout_metadata(self):
         class NeverCompletesOpener:
             def __init__(self):
                 self.requests = []
@@ -105,7 +105,7 @@ class VideoGeneratorTests(unittest.TestCase):
         opener = NeverCompletesOpener()
         client = OpenRouterVideoClient(
             api_key="test-key",
-            max_poll_attempts=360,
+            max_poll_attempts=72,
             opener=opener,
             sleeper=lambda _seconds: None,
             image_dimensions_reader=self.image_dimensions_reader,
@@ -121,10 +121,10 @@ class VideoGeneratorTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(len(opener.requests), 361)
+        self.assertEqual(len(opener.requests), 73)
         self.assertEqual(context.exception.job_id, "job-1")
         self.assertEqual(context.exception.last_status, "pending")
-        self.assertEqual(context.exception.poll_count, 360)
+        self.assertEqual(context.exception.poll_count, 72)
 
     def test_builds_prompt_from_script_scenes(self):
         prompt = build_video_prompt(SCRIPT)
