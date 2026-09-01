@@ -200,6 +200,17 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertIn("| 1 | 0s - 1s | 장면 |", formatted)
         self.assertNotIn("| Hook |", formatted)
 
+    def test_formats_json_string_as_documented(self):
+        formatted = convert_dict_to_formatted_text(json.dumps({
+            "scenes": [{
+                "section": "Hook",
+                "time_range_sec": {"start": 0, "end": 1},
+                "visual": "장면",
+            }],
+        }))
+
+        self.assertIn("| 1 | 0s - 1s | 장면 |", formatted)
+
     def test_submits_video_job_and_polls_until_completed(self):
         opener = SequentialOpener([
             {"id": "job-1", "polling_url": "https://example.com/poll/job-1", "status": "pending"},
@@ -297,6 +308,14 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertIn("Image 2", request_body["prompt"])
         self.assertIn("Image 1 as the AI influencer reference", request_body["prompt"])
         self.assertIn("Image 2 as the main product reference", request_body["prompt"])
+
+    def test_video_prompt_includes_documented_person_and_label_rules(self):
+        prompt = build_video_prompt(SCRIPT, has_influencer_image=True)
+
+        self.assertIn("Use the provided person image as the character reference", prompt)
+        self.assertIn("Front-facing appearance is not required", prompt)
+        self.assertIn("slight handheld motion", prompt)
+        self.assertIn("Do not intentionally show product text in a readable close-up", prompt)
 
     def test_submits_all_product_detail_images_after_influencer_and_main_image(self):
         opener = SequentialOpener([
