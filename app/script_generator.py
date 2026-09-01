@@ -665,7 +665,8 @@ class OpenRouterClient:
         fallback_model: str | None = DEFAULT_FALLBACK_MODEL,
         api_url: str = DEFAULT_API_URL,
         timeout_seconds: int = 60,
-        max_attempts: int = 2,
+        # Keep five total attempts when no database-backed settings are configured.
+        max_attempts: int = 5,
         opener: Callable[..., Any] = urlopen,
         retry_delay_seconds: float = 2.0,
         sleep: Callable[[float], None] = time.sleep,
