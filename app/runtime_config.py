@@ -94,6 +94,7 @@ def build_video_client(
         "api_key": api_key,
         "model": model,
         "api_url": environment_client.api_url,
+        "image_format_reader": environment_client.image_format_reader,
         "supported_durations": (
             capabilities.supported_durations
             if capabilities
