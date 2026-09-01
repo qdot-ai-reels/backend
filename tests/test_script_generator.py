@@ -432,6 +432,16 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("PAS", prompt)
         self.assertIn("Anti-Slop Prompt For Video", prompt)
 
+    def test_includes_all_script_prompt_260830_1_video_direction_rules(self):
+        prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
+
+        self.assertIn("dolly", prompt)
+        self.assertIn("카메라를 주시하며 말하지 않는다", prompt)
+        self.assertIn("같은 인물의 얼굴, 헤어스타일, 의상이 장면마다 유지", prompt)
+        self.assertIn("상품 라벨의 글자와 로고는 식별 가능한 정면 클로즈업으로 보여주지 않는다", prompt)
+        self.assertIn("자막, 가격, 할인율, CTA 문구는 영상에 삽입하지 않는다", prompt)
+        self.assertIn("visual은 100자 미만", prompt)
+
     def test_adds_product_image_to_multimodal_message(self):
         request = ScriptGenerationRequest(
             product=PRODUCT,

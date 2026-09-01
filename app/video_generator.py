@@ -82,11 +82,13 @@ def build_video_prompt(
     """Convert a validated script document into a video-generation prompt."""
     reference_instruction = (
         "Use Image 1 as the AI influencer reference and Image 2 as the main product reference. "
+        "Use the provided person image as the character reference. The person in the image "
+        "was generated using AI. Front-facing appearance is not required. "
         "Use any following images as additional product detail references. "
         "The AI influencer must be clearly visible on screen and actively promote the "
         "product in the generated video; do not replace the influencer with only a hand, "
-        "finger, or an off-screen action. Preserve the "
-        "influencer's identity and the product's shape, label, colors, and text. "
+        "finger, or an off-screen action. Preserve the influencer's identity and the "
+        "product's shape, label, colors, and text. "
         if has_influencer_image
         else "Use the provided product image as the visual reference and preserve the product shape, label, colors, and text. "
     )
@@ -94,7 +96,14 @@ def build_video_prompt(
         "Create a vertical product advertisement video. "
         + reference_instruction
         + "Use a 9:16 aspect ratio, clean lighting, and simple transitions. "
+        "Do not use dialogue or direct-to-camera speech. "
+        "Keep the same person's appearance and clothing consistent across shots. "
+        "Use slight handheld motion, imperfect skin texture, subtle blemishes, subtle "
+        "clothing wrinkles, and natural and subtle asymmetry where people appear. "
         "Do not add subtitles, captions, prices, discounts, CTA text, or dialogue. "
+        "Do not intentionally show product text in a readable close-up. "
+        "Preserve the original product label and graphics. "
+        "Do not generate or modify package text or logos. "
         "Text animation will be added separately after video generation. "
         "Do not add unsupported product claims, extra products, new logos, "
         "or distorted text. Follow these script scenes:\n"
@@ -102,8 +111,12 @@ def build_video_prompt(
     )
 
 
-def convert_dict_to_formatted_text(data: Mapping[str, Any]) -> str:
+def convert_dict_to_formatted_text(data: Mapping[str, Any] | str) -> str:
     """Format the scene visual instructions as the documented Markdown table."""
+    if isinstance(data, str):
+        data = json.loads(data)
+    if not isinstance(data, Mapping):
+        raise TypeError("스크립트는 JSON 객체 또는 dict여야 합니다.")
     scenes = data.get("scenes", [])
     if not isinstance(scenes, list) or not scenes:
         return ""
