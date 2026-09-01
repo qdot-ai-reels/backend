@@ -35,7 +35,9 @@ from app.video_validation_pipeline import VideoValidationPipeline
 
 router = APIRouter()
 LOCAL_COMBINED_OUTPUT_DIR = Path(os.getenv("COMBINED_VIDEO_OUTPUT_DIR", "runtime/combined"))
-BACKGROUND_VIDEO_MAX_WAIT_SECONDS = 6 * 60
+# Keep one provider job alive long enough for late completions. The frontend
+# polls independently, so this does not block the initial HTTP response.
+BACKGROUND_VIDEO_MAX_WAIT_SECONDS = 18 * 60
 VIDEO_POLL_INTERVAL_SECONDS = 5
 BACKGROUND_VIDEO_MAX_POLL_ATTEMPTS = (
     BACKGROUND_VIDEO_MAX_WAIT_SECONDS // VIDEO_POLL_INTERVAL_SECONDS
@@ -140,6 +142,7 @@ def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
             influencer_image_url,
             _extract_detail_image_urls(payload.get("product")),
             service,
+            job_id=job_id,
         )
         if not video_result.storage_path:
             raise RuntimeError("검증된 영상의 로컬 저장 경로를 확인할 수 없습니다.")
@@ -233,12 +236,20 @@ def _generate_video(
     influencer_image_url: str | None,
     detail_image_urls: tuple[str, ...],
     service: SettingsService | None,
+    job_id: str | None = None,
 ):
     capabilities = get_video_model_capabilities(service)
     client = build_video_client(
         service,
         capabilities,
         max_poll_attempts=BACKGROUND_VIDEO_MAX_POLL_ATTEMPTS,
+        on_submitted=(
+            (lambda provider_job_id, _polling_url: update_job(
+                job_id, video_job_id=provider_job_id
+            ))
+            if job_id
+            else None
+        ),
     )
     request = VideoGenerationRequest(
         script=script,

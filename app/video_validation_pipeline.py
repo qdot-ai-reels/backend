@@ -82,9 +82,9 @@ class VideoValidationPipeline:
             try:
                 generated = self.generate_video(request, attempt)
             except VideoGenerationTimeoutError:
-                if attempt == self.max_retries + 1:
-                    raise
-                continue
+                # Do not submit another paid provider job while this one may
+                # still be pending; the caller keeps the original job visible.
+                raise
             last_url = generated.video_url
             last_job_id = generated.job_id
             total_cost += generated.cost or 0.0
