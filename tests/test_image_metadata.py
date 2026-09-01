@@ -18,7 +18,7 @@ class ImageMetadataTests(unittest.TestCase):
             dimensions_reader=read_dimensions,
         )
 
-        self.assertIsNone(result)
+        self.assertEqual(result, ("https://example.com/detail.jpg",))
         self.assertEqual(
             seen,
             [
@@ -28,16 +28,32 @@ class ImageMetadataTests(unittest.TestCase):
             ],
         )
 
-    def test_rejects_any_invalid_image_with_its_label(self):
+    def test_skips_invalid_detail_image(self):
         def read_dimensions(url):
-            if url.endswith("detail.jpg"):
+            if url.endswith("/detail.jpg"):
                 return 860, 1
             return 800, 1200
 
-        with self.assertRaisesRegex(ValueError, "상세 이미지 1번째.*860x1"):
+        result = validate_image_inputs(
+            image_url="https://example.com/product.jpg",
+            detail_image_urls=(
+                "https://example.com/detail.jpg",
+                "https://example.com/valid-detail.jpg",
+            ),
+            dimensions_reader=read_dimensions,
+        )
+
+        self.assertEqual(result, ("https://example.com/valid-detail.jpg",))
+
+    def test_still_rejects_invalid_required_image(self):
+        def read_dimensions(url):
+            if url.endswith("product.jpg"):
+                return 860, 1
+            return 800, 1200
+
+        with self.assertRaisesRegex(ValueError, "860x1"):
             validate_image_inputs(
                 image_url="https://example.com/product.jpg",
-                detail_image_urls=("https://example.com/detail.jpg",),
                 dimensions_reader=read_dimensions,
             )
 

@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 from collections.abc import Sequence
 from urllib.parse import urlparse
+
+
+logger = logging.getLogger(__name__)
 
 
 def read_image_dimensions(image_url: str) -> tuple[int, int]:
@@ -68,24 +72,40 @@ def validate_image_inputs(
     influencer_image_url: str | None = None,
     detail_image_urls: Sequence[str] = (),
     dimensions_reader=read_image_dimensions,
-) -> None:
-    """Fail when any image that may be sent to a provider is invalid."""
+) -> tuple[str, ...]:
+    """Validate required images and return only usable detail image URLs.
+
+    Detail images are optional references. A malformed detail image should not
+    block generation when the required product and influencer images are valid.
+    """
     candidates: list[tuple[str, str]] = []
     if image_url:
         candidates.append(("상품 이미지", image_url))
     if influencer_image_url:
         candidates.append(("AI 인플루언서 이미지", influencer_image_url))
-    candidates.extend(
-        (f"상품 상세 이미지 {index}번째", image_url)
-        for index, image_url in enumerate(detail_image_urls, start=1)
-        if image_url
-    )
-
     for label, image_url in candidates:
+        validate_image_dimensions(
+            image_url,
+            dimensions_reader=dimensions_reader,
+        )
+
+    valid_detail_image_urls: list[str] = []
+    for index, detail_image_url in enumerate(detail_image_urls, start=1):
+        if not detail_image_url:
+            continue
         try:
             validate_image_dimensions(
-                image_url,
+                detail_image_url,
                 dimensions_reader=dimensions_reader,
             )
         except ValueError as error:
-            raise ValueError(f"{label}: {error}") from error
+            logger.warning(
+                "Skipping invalid product detail image: index=%s url=%s reason=%s",
+                index,
+                detail_image_url,
+                error,
+            )
+            continue
+        valid_detail_image_urls.append(detail_image_url)
+
+    return tuple(valid_detail_image_urls)
