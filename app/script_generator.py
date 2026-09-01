@@ -286,7 +286,8 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - 자막은 짧게 작성하고 화면에 넣을 문구와 내레이션을 구분
 - 대사는 장면 시간 안에 읽을 수 있도록 작성하고, 평균 1초당 4.5음절을 기준으로 계산
 - 각 장면의 대사 음절 수가 해당 장면 시간 x 4.5를 넘지 않도록 작성
-- 추상적인 표현 대신 dolly, pan, tilt, crane, push-in, rack focus, locked-off 같은 카메라 용어와 구체적인 조명 지시를 사용하세요.
+- 추상적인 표현 대신 dolly, pan, tilt, crane, push-in, rack focus, locked-off 같은 카메라 용어와 Reduce fill, Cool down, Desaturate, Diffuse, Dim down, Reposition 같은 조명 용어를 사용하세요.
+- 제품이 등장하는 장면에는 제품 사용 흔적(signs of use)을 자연스럽게 반영하세요.
 - 등장인물이 카메라를 주시하며 말하지 않는다.
 - 같은 인물의 얼굴, 헤어스타일, 의상이 장면마다 유지되도록 한다.
 - 상품 이미지의 형태, 색상, 라벨, 용기가 바뀌지 않도록 한다.

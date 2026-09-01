@@ -436,6 +436,8 @@ class ScriptGeneratorTests(unittest.TestCase):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
 
         self.assertIn("dolly", prompt)
+        self.assertIn("Reduce fill", prompt)
+        self.assertIn("제품 사용 흔적", prompt)
         self.assertIn("카메라를 주시하며 말하지 않는다", prompt)
         self.assertIn("같은 인물의 얼굴, 헤어스타일, 의상이 장면마다 유지", prompt)
         self.assertIn("상품 라벨의 글자와 로고는 식별 가능한 정면 클로즈업으로 보여주지 않는다", prompt)
