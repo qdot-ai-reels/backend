@@ -126,7 +126,7 @@ class SettingsServiceTests(unittest.TestCase):
         self.assertEqual(public.video_min_resolution, "720p")
         self.assertEqual(public.video_max_resolution, "1080p")
         self.assertEqual(public.video_max_duration_seconds, 15)
-        self.assertEqual(public.script_generation_retries, 2)
+        self.assertEqual(public.script_generation_retries, 4)
         self.assertEqual(public.video_generation_retries, 2)
         self.assertEqual(public.media_combine_retries, 3)
 

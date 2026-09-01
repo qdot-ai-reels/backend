@@ -35,7 +35,8 @@ class GlobalSettings:
     video_min_resolution: str = "720p"
     video_max_resolution: str = "1080p"
     video_max_duration_seconds: int = 15
-    script_generation_retries: int = 2
+    # One initial request plus four retries equals five total attempts.
+    script_generation_retries: int = 4
     video_generation_retries: int = 2
     media_combine_retries: int = 3
     mute_original_audio: bool = True
