@@ -32,13 +32,7 @@ class ScriptGenerationBody(BaseModel):
 def validate_product_image_inputs(product: dict[str, Any], image_url: str | None) -> None:
     raw_product = product.get("product") if isinstance(product.get("product"), dict) else product
     primary_image_url = image_url or raw_product.get("image_url") or product.get("image_url")
-    detail_image_urls = raw_product.get("detail_image_urls", [])
-    if not isinstance(detail_image_urls, list):
-        detail_image_urls = []
-    validate_image_inputs(
-        image_url=primary_image_url,
-        detail_image_urls=detail_image_urls,
-    )
+    validate_image_inputs(image_url=primary_image_url)
 
 
 @router.post(

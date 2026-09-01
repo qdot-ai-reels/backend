@@ -12,7 +12,11 @@ from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from app.image_metadata import read_image_dimensions, validate_image_dimensions
+from app.image_metadata import (
+    read_image_dimensions,
+    validate_image_dimensions,
+    validate_image_inputs,
+)
 from app.script_generator import (
     OpenRouterConfigurationError,
     OpenRouterRequestError,
@@ -195,11 +199,10 @@ class OpenRouterVideoClient:
                     request.influencer_image_url,
                     dimensions_reader=self.image_dimensions_reader,
                 )
-            for detail_image_url in request.detail_image_urls:
-                validate_image_dimensions(
-                    detail_image_url,
-                    dimensions_reader=self.image_dimensions_reader,
-                )
+            valid_detail_image_urls = validate_image_inputs(
+                detail_image_urls=request.detail_image_urls,
+                dimensions_reader=self.image_dimensions_reader,
+            )
         except ValueError as error:
             raise VideoGenerationError(f"입력 이미지를 사용할 수 없습니다: {error}") from error
         duration_seconds = self._validate_and_get_duration(request.script)
@@ -227,7 +230,7 @@ class OpenRouterVideoClient:
                 self._image_reference(request.image_url),
                 *(
                     self._image_reference(image_url)
-                    for image_url in request.detail_image_urls
+                    for image_url in valid_detail_image_urls
                 ),
             ]
         else:

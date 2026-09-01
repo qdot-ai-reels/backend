@@ -303,6 +303,46 @@ class VideoGeneratorTests(unittest.TestCase):
             ],
         )
 
+    def test_skips_invalid_product_detail_images_before_submission(self):
+        opener = SequentialOpener([
+            {"id": "job-1", "polling_url": "https://example.com/poll/job-1"},
+            {"id": "job-1", "status": "completed", "unsigned_urls": ["https://example.com/video.mp4"]},
+        ])
+
+        def read_dimensions(url):
+            if url.endswith("invalid.jpg"):
+                return 860, 1
+            return 720, 1280
+
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            opener=opener,
+            sleeper=lambda _seconds: None,
+            image_dimensions_reader=read_dimensions,
+        )
+
+        client.generate_video(
+            VideoGenerationRequest(
+                script=SCRIPT,
+                image_url="https://example.com/product.jpg",
+                influencer_image_url="https://example.com/influencer.jpg",
+                detail_image_urls=(
+                    "https://example.com/invalid.jpg",
+                    "https://example.com/valid-detail.jpg",
+                ),
+            )
+        )
+
+        request_body = json.loads(opener.requests[0].data)
+        self.assertEqual(
+            [item["image_url"]["url"] for item in request_body["input_references"]],
+            [
+                "https://example.com/influencer.jpg",
+                "https://example.com/product.jpg",
+                "https://example.com/valid-detail.jpg",
+            ],
+        )
+
     def test_raises_when_video_job_fails(self):
         opener = SequentialOpener([
             {"id": "job-1", "polling_url": "https://example.com/poll/job-1", "status": "pending"},
