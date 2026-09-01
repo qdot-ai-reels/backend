@@ -22,6 +22,7 @@ def create_job(
             GenerationJobRow(
                 job_id=job_id,
                 status="PENDING",
+                stage="QUEUED",
                 input_type=input_type,
                 product_json=json.dumps(product, ensure_ascii=False) if product else None,
                 script_json=json.dumps(script, ensure_ascii=False) if script else None,
@@ -33,7 +34,7 @@ def create_job(
 
 def update_job(job_id: str, **values: Any) -> None:
     allowed = {
-        "status", "script_json", "video_job_id", "caption_job_id",
+        "status", "stage", "script_json", "video_job_id", "caption_job_id",
         "output_path", "error_message", "cost",
     }
     unknown = set(values) - allowed
@@ -58,6 +59,7 @@ def get_job(job_id: str) -> dict[str, Any] | None:
         return {
             "job_id": row.job_id,
             "status": row.status,
+            "stage": row.stage,
             "input_type": row.input_type,
             "script": json.loads(row.script_json) if row.script_json else None,
             "video_job_id": row.video_job_id,
@@ -67,4 +69,32 @@ def get_job(job_id: str) -> dict[str, Any] | None:
             "cost": row.cost,
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            "elapsed_seconds": _elapsed_seconds(row.created_at, row.updated_at, row.status),
+            "message": _status_message(row.status, row.stage),
         }
+
+
+def _elapsed_seconds(created_at, updated_at, status: str) -> float | None:
+    if created_at is None:
+        return None
+    end = updated_at if status in {"COMPLETED", "FAILED"} else datetime.now(timezone.utc)
+    start = created_at
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    return round(max(0.0, (end - start).total_seconds()), 2)
+
+
+def _status_message(status: str, stage: str | None) -> str:
+    if status == "COMPLETED":
+        return "최종 영상 생성이 완료되었습니다."
+    if status == "FAILED":
+        return "최종 영상 생성을 완료하지 못했습니다."
+    return {
+        "QUEUED": "생성 작업을 준비하고 있습니다.",
+        "TTS_GENERATION": "음성을 생성하고 있습니다.",
+        "VIDEO_GENERATION": "영상 생성 서버에서 영상을 만들고 있습니다.",
+        "AUDIO_MERGE": "영상과 음성을 결합하고 있습니다.",
+        "CAPTION_RENDER": "Caption을 적용하고 있습니다.",
+    }.get(stage or "", "최종 영상을 생성하고 있습니다.")
