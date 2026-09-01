@@ -16,6 +16,7 @@ class ImageMetadataTests(unittest.TestCase):
             influencer_image_url="https://example.com/influencer.jpg",
             detail_image_urls=("https://example.com/detail.jpg",),
             dimensions_reader=read_dimensions,
+            format_reader=lambda _url: "jpg",
         )
 
         self.assertEqual(result, ("https://example.com/detail.jpg",))
@@ -41,6 +42,7 @@ class ImageMetadataTests(unittest.TestCase):
                 "https://example.com/valid-detail.jpg",
             ),
             dimensions_reader=read_dimensions,
+            format_reader=lambda _url: "jpg",
         )
 
         self.assertEqual(result, ("https://example.com/valid-detail.jpg",))
@@ -55,6 +57,28 @@ class ImageMetadataTests(unittest.TestCase):
             validate_image_inputs(
                 image_url="https://example.com/product.jpg",
                 dimensions_reader=read_dimensions,
+                format_reader=lambda _url: "jpg",
+            )
+
+    def test_skips_unsupported_detail_image_format(self):
+        result = validate_image_inputs(
+            image_url="https://example.com/product.jpg",
+            detail_image_urls=(
+                "https://example.com/detail.gif",
+                "https://example.com/detail.webp",
+            ),
+            dimensions_reader=lambda _url: (800, 1200),
+            format_reader=lambda url: "gif" if url.endswith(".gif") else "webp",
+        )
+
+        self.assertEqual(result, ("https://example.com/detail.webp",))
+
+    def test_still_rejects_unsupported_required_image_format(self):
+        with self.assertRaisesRegex(ValueError, "gif.*지원되지 않습니다"):
+            validate_image_inputs(
+                image_url="https://example.com/product.gif",
+                dimensions_reader=lambda _url: (800, 1200),
+                format_reader=lambda _url: "gif",
             )
 
 

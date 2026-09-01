@@ -319,6 +319,7 @@ class VideoGeneratorTests(unittest.TestCase):
             opener=opener,
             sleeper=lambda _seconds: None,
             image_dimensions_reader=read_dimensions,
+            image_format_reader=lambda _url: "jpg",
         )
 
         client.generate_video(

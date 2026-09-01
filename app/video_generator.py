@@ -14,7 +14,7 @@ from urllib.request import Request, urlopen
 
 from app.image_metadata import (
     read_image_dimensions,
-    validate_image_dimensions,
+    read_image_format,
     validate_image_inputs,
 )
 from app.script_generator import (
@@ -141,6 +141,7 @@ class OpenRouterVideoClient:
         opener: Callable[..., Any] = urlopen,
         sleeper: Callable[[float], None] = time.sleep,
         image_dimensions_reader: Callable[[str], tuple[int, int]] = read_image_dimensions,
+        image_format_reader: Callable[[str], str] | None = None,
     ) -> None:
         if max_poll_attempts < 1:
             raise ValueError("max_poll_attempts는 1 이상이어야 합니다.")
@@ -156,6 +157,7 @@ class OpenRouterVideoClient:
         self.opener = opener
         self.sleeper = sleeper
         self.image_dimensions_reader = image_dimensions_reader
+        self.image_format_reader = image_format_reader
 
     @classmethod
     def from_env(cls) -> "OpenRouterVideoClient":
@@ -163,6 +165,7 @@ class OpenRouterVideoClient:
             api_key=os.getenv("OPENROUTER_VIDEO_API_KEY", ""),
             model=os.getenv("OPENROUTER_VIDEO_MODEL") or DEFAULT_VIDEO_MODEL,
             api_url=os.getenv("OPENROUTER_VIDEO_API_URL") or DEFAULT_VIDEO_API_URL,
+            image_format_reader=read_image_format,
             supported_durations=tuple(
                 int(value)
                 for value in (
@@ -190,18 +193,12 @@ class OpenRouterVideoClient:
         if not request.image_url:
             raise VideoGenerationError("영상 생성에는 상품 이미지 URL이 필요합니다.")
         try:
-            validate_image_dimensions(
-                request.image_url,
-                dimensions_reader=self.image_dimensions_reader,
-            )
-            if request.influencer_image_url:
-                validate_image_dimensions(
-                    request.influencer_image_url,
-                    dimensions_reader=self.image_dimensions_reader,
-                )
             valid_detail_image_urls = validate_image_inputs(
+                image_url=request.image_url,
+                influencer_image_url=request.influencer_image_url,
                 detail_image_urls=request.detail_image_urls,
                 dimensions_reader=self.image_dimensions_reader,
+                format_reader=self.image_format_reader,
             )
         except ValueError as error:
             raise VideoGenerationError(f"입력 이미지를 사용할 수 없습니다: {error}") from error
