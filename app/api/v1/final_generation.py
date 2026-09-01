@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 from app.api.v1.caption import render_captioned_video_file
 from app.api.v1.video import publish_validated_video, select_video_resolution
@@ -27,7 +27,7 @@ from app.runtime_config import (
 )
 from app.script_generator import ScriptGenerationRequest
 from app.settings_service import SettingsService
-from app.tts_generator import OpenRouterTTSClient
+from app.tts_generator import OpenRouterTTSClient, SceneAudioDurationError
 from app.video_generator import VideoGenerationRequest
 from app.video_validation_pipeline import VideoValidationPipeline
 
@@ -39,13 +39,14 @@ VIDEO_POLL_INTERVAL_SECONDS = 5
 BACKGROUND_VIDEO_MAX_POLL_ATTEMPTS = (
     BACKGROUND_VIDEO_MAX_WAIT_SECONDS // VIDEO_POLL_INTERVAL_SECONDS
 )
+MAX_SCRIPT_REGENERATIONS = 5
 
 
 class FinalGenerationBody(BaseModel):
-    """Accept either original product data or an already generated script."""
+    """Accept product context together with the script to be rendered."""
 
-    product: dict[str, Any] | None = None
-    script: dict[str, Any] | None = None
+    product: dict[str, Any] = Field(min_length=1)
+    script: dict[str, Any] = Field(min_length=1)
     image_url: str | None = Field(default=None, min_length=1)
     influencer_image_url: str = Field(min_length=1)
     reviews: list[Any] = Field(default_factory=list)
@@ -54,19 +55,10 @@ class FinalGenerationBody(BaseModel):
     channel: str = "Instagram Reels"
     target_audience: str = "육아에 관심 있는 보호자"
 
-    @model_validator(mode="after")
-    def require_one_input(self) -> "FinalGenerationBody":
-        if self.product is None and self.script is None:
-            raise ValueError("product 또는 script 중 하나는 필요합니다.")
-        if self.product is not None and self.script is not None:
-            raise ValueError("product와 script를 동시에 보낼 수 없습니다.")
-        return self
-
-
-@router.post("/generate", status_code=status.HTTP_202_ACCEPTED, summary="상품 JSON 또는 스크립트로 전체 릴스 생성 작업 시작")
+@router.post("/generate", status_code=status.HTTP_202_ACCEPTED, summary="상품 데이터와 스크립트로 전체 릴스 생성 작업 시작")
 def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTasks) -> dict[str, Any]:
     job_id = uuid.uuid4().hex
-    input_type = "product" if body.product is not None else "script"
+    input_type = "product_and_script"
     image_url = body.image_url or _extract_image_url(body.product)
     if not image_url:
         raise HTTPException(status_code=422, detail="상품 이미지 URL이 필요합니다.")
@@ -108,12 +100,17 @@ def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
     session = None
     try:
         service, session = _build_settings_service()
-        script = payload.get("script")
+        script = payload["script"]
         image_url = payload.get("image_url") or _extract_image_url(payload.get("product"))
         influencer_image_url = payload.get("influencer_image_url")
-        if script is None:
-            script = _generate_script(payload, service)
-            update_job(job_id, script_json=json.dumps(script, ensure_ascii=False))
+        script, audio_content = _generate_narration_with_script_regeneration(
+            payload, script, service
+        )
+        update_job(job_id, script_json=json.dumps(script, ensure_ascii=False))
+        audio_path = Path("runtime/tts") / job_id / "narration.mp3"
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        audio_path.write_bytes(audio_content)
+
         video_result = _generate_video(
             script,
             image_url,
@@ -125,10 +122,6 @@ def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
             raise RuntimeError("검증된 영상의 로컬 저장 경로를 확인할 수 없습니다.")
         update_job(job_id, video_job_id=video_result.job_id, cost=video_result.total_cost)
 
-        audio_path = Path("runtime/tts") / job_id / "narration.mp3"
-        audio_path.parent.mkdir(parents=True, exist_ok=True)
-        audio_content = OpenRouterTTSClient(settings=build_tts_settings(service)).generate_narration(script)
-        audio_path.write_bytes(audio_content)
         combined_path = LOCAL_COMBINED_OUTPUT_DIR / job_id / "combined.mp4"
         combine_video_and_audio(video_result.storage_path, audio_path, combined_path)
         caption_result = render_captioned_video_file(script, combined_path)
@@ -145,7 +138,41 @@ def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
             session.close()
 
 
-def _generate_script(payload: dict[str, Any], service: SettingsService | None) -> dict[str, Any]:
+def _generate_narration_with_script_regeneration(
+    payload: dict[str, Any],
+    script: dict[str, Any],
+    service: SettingsService | None,
+) -> tuple[dict[str, Any], bytes]:
+    """Validate TTS before video generation and regenerate scripts on overflow."""
+    if not isinstance(payload.get("product"), dict):
+        raise ValueError("스크립트 재생성에 필요한 상품 데이터가 없습니다.")
+
+    tts_client = OpenRouterTTSClient(
+        settings=build_tts_settings(service),
+        retry_duration_errors=False,
+    )
+    current_script = script
+    for regeneration in range(MAX_SCRIPT_REGENERATIONS + 1):
+        try:
+            return current_script, tts_client.generate_narration(current_script)
+        except SceneAudioDurationError as error:
+            if regeneration >= MAX_SCRIPT_REGENERATIONS:
+                raise
+            current_script = _generate_script(
+                payload,
+                service,
+                retry_error=error,
+            )
+
+    raise RuntimeError("스크립트 재생성 흐름을 완료하지 못했습니다.")
+
+
+def _generate_script(
+    payload: dict[str, Any],
+    service: SettingsService | None,
+    *,
+    retry_error: Exception | None = None,
+) -> dict[str, Any]:
     raw = payload.get("product") or {}
     product = raw.get("product") if isinstance(raw.get("product"), dict) else raw
     max_duration_seconds, supported_durations = resolve_script_generation_duration(
@@ -153,11 +180,20 @@ def _generate_script(payload: dict[str, Any], service: SettingsService | None) -
         or (service.get_runtime_settings().video_max_duration_seconds if service else 15),
         service,
     )
+    custom_prompt = payload.get("prompt")
+    if retry_error is not None:
+        retry_instruction = (
+            f"기존 스크립트의 TTS 검증 실패 사유는 다음과 같습니다: {retry_error}. "
+            "해당 장면의 voiceover를 줄여 새 스크립트를 생성하세요."
+        )
+        custom_prompt = "\n".join(
+            value for value in (custom_prompt, retry_instruction) if value
+        )
     request = ScriptGenerationRequest(
         product=product,
         image_url=payload.get("image_url") or _extract_image_url(raw),
         reviews=payload.get("reviews") or raw.get("reviews", []),
-        custom_prompt=payload.get("prompt"),
+        custom_prompt=custom_prompt,
         max_duration_seconds=max_duration_seconds,
         channel=payload.get("channel", "Instagram Reels"),
         target_audience=payload.get("target_audience", "육아에 관심 있는 보호자"),

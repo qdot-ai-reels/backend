@@ -9,9 +9,11 @@ from app.api.v1.final_generation import (
     BACKGROUND_VIDEO_MAX_POLL_ATTEMPTS,
     BACKGROUND_VIDEO_MAX_WAIT_SECONDS,
     FinalGenerationBody,
+    _generate_narration_with_script_regeneration,
     _generate_video,
     router,
 )
+from app.tts_generator import SceneAudioDurationError
 from app.settings_service import VideoModelCapabilities
 
 
@@ -55,36 +57,29 @@ class FinalGenerationApiTests(unittest.TestCase):
             max_poll_attempts=72,
         )
 
-    def test_accepts_original_product_json(self):
+    def test_accepts_product_and_existing_script(self):
         body = FinalGenerationBody(
             product={
                 "product": {"name": "상품", "image_url": "https://example.com/product.jpg"}
             },
+            script={"scenes": []},
             influencer_image_url="https://example.com/influencer.jpg",
         )
 
         self.assertIsNotNone(body.product)
-        self.assertIsNone(body.script)
-
-    def test_accepts_generated_script_json_with_separate_image(self):
-        body = FinalGenerationBody(
-            script={"meta": {}, "summary": {}, "scenes": []},
-            image_url="https://example.com/product.jpg",
-            influencer_image_url="https://example.com/influencer.jpg",
-        )
-
         self.assertIsNotNone(body.script)
-        self.assertIsNone(body.product)
 
     def test_requires_influencer_image(self):
         with self.assertRaises(ValidationError):
             FinalGenerationBody(
+                product={"name": "상품"},
                 script={"meta": {}, "summary": {}, "scenes": []},
                 image_url="https://example.com/product.jpg",
             )
 
     def test_accepts_influencer_image(self):
         body = FinalGenerationBody(
+            product={"name": "상품"},
             script={"meta": {}, "summary": {}, "scenes": []},
             image_url="https://example.com/product.jpg",
             influencer_image_url="https://example.com/influencer.jpg",
@@ -96,12 +91,46 @@ class FinalGenerationApiTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             FinalGenerationBody()
 
-    def test_rejects_both_input_modes(self):
+    def test_rejects_product_without_existing_script(self):
         with self.assertRaises(ValidationError):
             FinalGenerationBody(
                 product={"image_url": "https://example.com/product.jpg"},
-                script={"scenes": []},
+                influencer_image_url="https://example.com/influencer.jpg",
             )
+
+    def test_rejects_script_without_product(self):
+        with self.assertRaises(ValidationError):
+            FinalGenerationBody(
+                script={"scenes": []},
+                image_url="https://example.com/product.jpg",
+                influencer_image_url="https://example.com/influencer.jpg",
+            )
+
+    @patch("app.api.v1.final_generation._generate_script")
+    @patch("app.api.v1.final_generation.OpenRouterTTSClient")
+    def test_regenerates_script_when_scene_tts_exceeds_time_range(
+        self, tts_client_class, generate_script
+    ):
+        initial_script = {"scenes": [{"time_range_sec": {"start": 0, "end": 2}}]}
+        regenerated_script = {"scenes": [{"time_range_sec": {"start": 0, "end": 2}}]}
+        duration_error = SceneAudioDurationError(1, 2.0, 2.45)
+        tts_client_class.return_value.generate_narration.side_effect = [
+            duration_error,
+            b"valid-audio",
+        ]
+        generate_script.return_value = regenerated_script
+
+        script, audio = _generate_narration_with_script_regeneration(
+            payload={"product": {"name": "상품"}},
+            script=initial_script,
+            service=None,
+        )
+
+        self.assertEqual(script, regenerated_script)
+        self.assertEqual(audio, b"valid-audio")
+        generate_script.assert_called_once()
+        self.assertIs(generate_script.call_args.kwargs["retry_error"], duration_error)
+        self.assertFalse(tts_client_class.call_args.kwargs["retry_duration_errors"])
 
     @patch("app.api.v1.final_generation.run_generation_job")
     @patch("app.api.v1.final_generation.create_job")
@@ -112,6 +141,7 @@ class FinalGenerationApiTests(unittest.TestCase):
             response = client.post(
                 "/generate",
                 json={
+                    "product": {"name": "상품"},
                     "script": {"scenes": []},
                     "image_url": "https://example.com/product.jpg",
                     "influencer_image_url": "https://example.com/influencer.jpg",
