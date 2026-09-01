@@ -46,11 +46,13 @@ class VideoGenerationTimeoutError(VideoGenerationError):
         last_status: str | None = None,
         poll_count: int | None = None,
         elapsed_seconds: float | None = None,
+        polling_url: str | None = None,
     ) -> None:
         self.job_id = job_id
         self.last_status = last_status
         self.poll_count = poll_count
         self.elapsed_seconds = elapsed_seconds
+        self.polling_url = polling_url
         super().__init__(message)
 
 
@@ -142,6 +144,7 @@ class OpenRouterVideoClient:
         sleeper: Callable[[float], None] = time.sleep,
         image_dimensions_reader: Callable[[str], tuple[int, int]] = read_image_dimensions,
         image_format_reader: Callable[[str], str] | None = None,
+        on_submitted: Callable[[str, str], None] | None = None,
     ) -> None:
         if max_poll_attempts < 1:
             raise ValueError("max_poll_attempts는 1 이상이어야 합니다.")
@@ -158,6 +161,7 @@ class OpenRouterVideoClient:
         self.sleeper = sleeper
         self.image_dimensions_reader = image_dimensions_reader
         self.image_format_reader = image_format_reader
+        self.on_submitted = on_submitted
 
     @classmethod
     def from_env(cls) -> "OpenRouterVideoClient":
@@ -242,6 +246,8 @@ class OpenRouterVideoClient:
         polling_url = submit_response.get("polling_url")
         if not job_id or not polling_url:
             raise VideoGenerationError("영상 생성 응답에 id 또는 polling_url이 없습니다.")
+        if self.on_submitted is not None:
+            self.on_submitted(str(job_id), str(polling_url))
 
         started_at = time.monotonic()
         logger.info(
@@ -314,6 +320,7 @@ class OpenRouterVideoClient:
             last_status=status,
             poll_count=self.max_poll_attempts,
             elapsed_seconds=elapsed_seconds,
+            polling_url=polling_url,
         )
 
     @staticmethod

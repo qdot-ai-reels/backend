@@ -126,6 +126,36 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertEqual(context.exception.job_id, "job-1")
         self.assertEqual(context.exception.last_status, "pending")
         self.assertEqual(context.exception.poll_count, 72)
+        self.assertEqual(context.exception.polling_url, "https://example.com/poll/job-1")
+
+    def test_completes_late_without_submitting_a_second_job(self):
+        responses = [
+            {"id": "job-1", "polling_url": "https://example.com/poll/job-1"},
+            {"id": "job-1", "status": "pending"},
+            {"id": "job-1", "status": "completed", "unsigned_urls": ["https://example.com/video.mp4"]},
+        ]
+        opener = SequentialOpener(responses)
+        submitted = []
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            max_poll_attempts=3,
+            opener=opener,
+            sleeper=lambda _seconds: None,
+            image_dimensions_reader=self.image_dimensions_reader,
+            on_submitted=lambda job_id, polling_url: submitted.append((job_id, polling_url)),
+        )
+
+        result = client.generate_video(
+            VideoGenerationRequest(
+                script=SCRIPT,
+                image_url="https://example.com/product.jpg",
+            )
+        )
+
+        self.assertEqual(result.job_id, "job-1")
+        self.assertEqual(result.video_url, "https://example.com/video.mp4")
+        self.assertEqual(len(opener.requests), 3)
+        self.assertEqual(submitted, [("job-1", "https://example.com/poll/job-1")])
 
     def test_builds_prompt_from_script_scenes(self):
         prompt = build_video_prompt(SCRIPT)

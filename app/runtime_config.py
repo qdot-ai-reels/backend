@@ -78,6 +78,7 @@ def build_video_client(
     service: SettingsService | None = None,
     capabilities: VideoModelCapabilities | None = None,
     max_poll_attempts: int | None = None,
+    on_submitted=None,
 ) -> OpenRouterVideoClient:
     environment_client = OpenRouterVideoClient.from_env()
     api_key = environment_client.api_key
@@ -113,6 +114,8 @@ def build_video_client(
     }
     if max_poll_attempts is not None:
         client_kwargs["max_poll_attempts"] = max_poll_attempts
+    if on_submitted is not None:
+        client_kwargs["on_submitted"] = on_submitted
 
     return OpenRouterVideoClient(
         **client_kwargs,

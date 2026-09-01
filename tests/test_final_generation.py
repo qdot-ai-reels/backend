@@ -18,15 +18,15 @@ from app.settings_service import VideoModelCapabilities
 
 
 class FinalGenerationApiTests(unittest.TestCase):
-    def test_background_video_wait_is_six_minutes(self):
-        self.assertEqual(BACKGROUND_VIDEO_MAX_WAIT_SECONDS, 6 * 60)
-        self.assertEqual(BACKGROUND_VIDEO_MAX_POLL_ATTEMPTS, 72)
+    def test_background_video_wait_allows_late_completion(self):
+        self.assertEqual(BACKGROUND_VIDEO_MAX_WAIT_SECONDS, 18 * 60)
+        self.assertEqual(BACKGROUND_VIDEO_MAX_POLL_ATTEMPTS, 216)
 
     @patch("app.api.v1.final_generation.VideoValidationPipeline")
     @patch("app.api.v1.final_generation.select_video_resolution", return_value="720p")
     @patch("app.api.v1.final_generation.build_video_client")
     @patch("app.api.v1.final_generation.get_video_model_capabilities")
-    def test_background_generation_passes_six_minute_poll_limit(
+    def test_background_generation_passes_extended_poll_limit(
         self,
         get_capabilities,
         build_client,
@@ -54,7 +54,8 @@ class FinalGenerationApiTests(unittest.TestCase):
         build_client.assert_called_once_with(
             None,
             get_capabilities.return_value,
-            max_poll_attempts=72,
+            max_poll_attempts=216,
+            on_submitted=None,
         )
 
     def test_accepts_product_and_existing_script(self):

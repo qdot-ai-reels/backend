@@ -42,18 +42,12 @@ SCRIPT = {
 
 
 class VideoValidationPipelineTests(unittest.TestCase):
-    def test_retries_video_generation_timeout(self):
+    def test_does_not_submit_duplicate_provider_jobs_after_timeout(self):
         attempts = []
 
         def generate_video(_request, attempt):
             attempts.append(attempt)
-            if attempt < 3:
-                raise VideoGenerationTimeoutError("polling timeout")
-            return VideoGenerationResult(
-                job_id="job-3",
-                status="completed",
-                video_url="https://example.com/video-3.mp4",
-            )
+            raise VideoGenerationTimeoutError("polling timeout", job_id="job-1")
 
         pipeline = VideoValidationPipeline(
             generate_video=generate_video,
@@ -62,11 +56,10 @@ class VideoValidationPipelineTests(unittest.TestCase):
             max_retries=2,
         )
 
-        result = pipeline.run(VideoGenerationRequest(SCRIPT, "https://example.com/product.jpg"))
+        with self.assertRaises(VideoGenerationTimeoutError):
+            pipeline.run(VideoGenerationRequest(SCRIPT, "https://example.com/product.jpg"))
 
-        self.assertEqual(result.status, PipelineStatus.COMPLETED)
-        self.assertEqual(result.attempts, 3)
-        self.assertEqual(attempts, [1, 2, 3])
+        self.assertEqual(attempts, [1])
 
     def test_returns_completed_when_downloaded_video_passes_validation(self):
         generated_urls = []
