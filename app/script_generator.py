@@ -279,7 +279,7 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - 최대 {request.max_duration_seconds}초
 - 선택한 광고 방법론을 적용하고 마지막 장면에 CTA를 포함
 - 사용할 수 있는 광고 방법론: Hook-Body-CTA, PAS, AIDA, BAB(Before-After-Bridge), 4Ps(Promise-Picture-Proof-Push)
-- 필요한 경우 Anti-Slop Prompt For Video를 활용해 과도하게 인공적인 표현을 줄이세요.
+- Anti-Slop Prompt For Video를 선택하는 경우 과도하게 인공적인 표현을 줄이고 제품 사용 흔적(signs of use)을 자연스럽게 반영하세요.
 - 장면마다 하나의 핵심 행동
 - 영상 없이 자막만 읽어도 이해 가능
 - 첫 장면은 시선을 끌고, 마지막 장면은 구체적인 CTA를 포함
@@ -287,7 +287,6 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - 대사는 장면 시간 안에 읽을 수 있도록 작성하고, 평균 1초당 4.5음절을 기준으로 계산
 - 각 장면의 대사 음절 수가 해당 장면 시간 x 4.5를 넘지 않도록 작성
 - 추상적인 표현 대신 dolly, pan, tilt, crane, push-in, rack focus, locked-off 같은 카메라 용어와 Reduce fill, Cool down, Desaturate, Diffuse, Dim down, Reposition 같은 조명 용어를 사용하세요.
-- 제품이 등장하는 장면에는 제품 사용 흔적(signs of use)을 자연스럽게 반영하세요.
 - 등장인물이 카메라를 주시하며 말하지 않는다.
 - 같은 인물의 얼굴, 헤어스타일, 의상이 장면마다 유지되도록 한다.
 - 상품 이미지의 형태, 색상, 라벨, 용기가 바뀌지 않도록 한다.

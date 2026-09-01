@@ -98,7 +98,7 @@ def build_video_prompt(
         + "Use a 9:16 aspect ratio, clean lighting, and simple transitions. "
         "Do not use dialogue or direct-to-camera speech. "
         "Keep the same person's appearance and clothing consistent across shots. "
-        "Use natural signs of product use, slight handheld motion, imperfect skin texture, subtle blemishes, subtle "
+        "Use slight handheld motion, imperfect skin texture, subtle blemishes, subtle "
         "clothing wrinkles, and natural and subtle asymmetry where people appear. "
         "Do not add subtitles, captions, prices, discounts, CTA text, or dialogue. "
         "Do not intentionally show product text in a readable close-up. "

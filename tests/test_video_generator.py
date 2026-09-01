@@ -315,7 +315,6 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertIn("Use the provided person image as the character reference", prompt)
         self.assertIn("Front-facing appearance is not required", prompt)
         self.assertIn("slight handheld motion", prompt)
-        self.assertIn("natural signs of product use", prompt)
         self.assertIn("Do not intentionally show product text in a readable close-up", prompt)
 
     def test_submits_all_product_detail_images_after_influencer_and_main_image(self):
