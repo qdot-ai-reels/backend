@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Sequence
 from urllib.parse import urlparse
 
 
@@ -59,3 +60,32 @@ def validate_image_dimensions(
             f"가로와 세로는 각각 {minimum_dimension}px 이상이어야 합니다."
         )
     return width, height
+
+
+def validate_image_inputs(
+    *,
+    image_url: str | None = None,
+    influencer_image_url: str | None = None,
+    detail_image_urls: Sequence[str] = (),
+    dimensions_reader=read_image_dimensions,
+) -> None:
+    """Fail when any image that may be sent to a provider is invalid."""
+    candidates: list[tuple[str, str]] = []
+    if image_url:
+        candidates.append(("상품 이미지", image_url))
+    if influencer_image_url:
+        candidates.append(("AI 인플루언서 이미지", influencer_image_url))
+    candidates.extend(
+        (f"상품 상세 이미지 {index}번째", image_url)
+        for index, image_url in enumerate(detail_image_urls, start=1)
+        if image_url
+    )
+
+    for label, image_url in candidates:
+        try:
+            validate_image_dimensions(
+                image_url,
+                dimensions_reader=dimensions_reader,
+            )
+        except ValueError as error:
+            raise ValueError(f"{label}: {error}") from error

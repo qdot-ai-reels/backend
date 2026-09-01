@@ -132,9 +132,38 @@ class FinalGenerationApiTests(unittest.TestCase):
         self.assertIs(generate_script.call_args.kwargs["retry_error"], duration_error)
         self.assertFalse(tts_client_class.call_args.kwargs["retry_duration_errors"])
 
+    @patch("app.api.v1.final_generation.validate_product_image_inputs")
+    @patch("app.api.v1.final_generation.create_job")
+    def test_rejects_invalid_image_before_creating_generation_job(
+        self, create_job, validate_images
+    ):
+        validate_images.side_effect = ValueError(
+            "상품 상세 이미지 1번째가 너무 작습니다: 860x1"
+        )
+        app = FastAPI()
+        app.include_router(router)
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/generate",
+                json={
+                    "product": {"name": "상품"},
+                    "script": {"scenes": []},
+                    "image_url": "https://example.com/product.jpg",
+                    "influencer_image_url": "https://example.com/influencer.jpg",
+                },
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("860x1", response.json()["detail"])
+        create_job.assert_not_called()
+
     @patch("app.api.v1.final_generation.run_generation_job")
     @patch("app.api.v1.final_generation.create_job")
-    def test_start_returns_job_id_and_status_url(self, create_job, run_job):
+    @patch("app.api.v1.final_generation.validate_product_image_inputs")
+    def test_start_returns_job_id_and_status_url(
+        self, _validate_images, create_job, run_job
+    ):
         app = FastAPI()
         app.include_router(router)
         with TestClient(app) as client:
