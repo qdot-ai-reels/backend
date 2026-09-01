@@ -150,6 +150,7 @@ class OpenRouterTTSClient:
         duration_reader: Callable[[bytes], float] | None = None,
         duration_tolerance_seconds: float = 0.1,
         max_retries: int = 5,
+        retry_duration_errors: bool = True,
         settings: OpenRouterTTSSettings | None = None,
     ) -> None:
         if duration_tolerance_seconds < 0:
@@ -162,6 +163,7 @@ class OpenRouterTTSClient:
         self.duration_reader = duration_reader or read_audio_duration
         self.duration_tolerance_seconds = duration_tolerance_seconds
         self.max_retries = max_retries
+        self.retry_duration_errors = retry_duration_errors
 
     def generate_narration(self, script: Mapping[str, Any]) -> bytes:
         scene_narrations = build_scene_narrations(script)
@@ -169,6 +171,10 @@ class OpenRouterTTSClient:
         for _attempt in range(self.max_retries + 1):
             try:
                 return self._generate_narration_once(scene_narrations)
+            except SceneAudioDurationError as error:
+                if not self.retry_duration_errors:
+                    raise
+                last_error = error
             except TTSGenerationError as error:
                 last_error = error
 
