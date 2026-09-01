@@ -1,4 +1,4 @@
-"""Read dimensions from remotely accessible image inputs."""
+"""Read metadata from remotely accessible image inputs."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 
 logger = logging.getLogger(__name__)
+SUPPORTED_IMAGE_FORMATS = frozenset({"jpeg", "jpg", "png", "bmp", "webp"})
 
 
 def read_image_dimensions(image_url: str) -> tuple[int, int]:
@@ -66,12 +67,63 @@ def validate_image_dimensions(
     return width, height
 
 
+def read_image_format(image_url: str) -> str:
+    """Return the provider-facing image format using ffprobe."""
+    parsed = urlparse(image_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("이미지 URL은 http 또는 https 주소여야 합니다.")
+
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                image_url,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        image_format = result.stdout.strip().lower()
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValueError("이미지 형식을 확인할 수 없습니다.") from error
+
+    if not image_format:
+        raise ValueError("이미지 형식을 확인할 수 없습니다.")
+    return "jpeg" if image_format == "mjpeg" else image_format
+
+
+def validate_image_format(
+    image_url: str,
+    *,
+    format_reader=read_image_format,
+) -> str:
+    """Reject image formats unsupported by the video provider."""
+    image_format = format_reader(image_url)
+    if image_format not in SUPPORTED_IMAGE_FORMATS:
+        supported = ", ".join(sorted(SUPPORTED_IMAGE_FORMATS))
+        raise ValueError(
+            f"이미지 형식 {image_format}은 지원되지 않습니다. "
+            f"지원 형식: {supported}"
+        )
+    return image_format
+
+
 def validate_image_inputs(
     *,
     image_url: str | None = None,
     influencer_image_url: str | None = None,
     detail_image_urls: Sequence[str] = (),
     dimensions_reader=read_image_dimensions,
+    format_reader=read_image_format,
 ) -> tuple[str, ...]:
     """Validate required images and return only usable detail image URLs.
 
@@ -83,11 +135,13 @@ def validate_image_inputs(
         candidates.append(("상품 이미지", image_url))
     if influencer_image_url:
         candidates.append(("AI 인플루언서 이미지", influencer_image_url))
-    for label, image_url in candidates:
+    for _, image_url in candidates:
         validate_image_dimensions(
             image_url,
             dimensions_reader=dimensions_reader,
         )
+        if format_reader is not None:
+            validate_image_format(image_url, format_reader=format_reader)
 
     valid_detail_image_urls: list[str] = []
     for index, detail_image_url in enumerate(detail_image_urls, start=1):
@@ -98,6 +152,8 @@ def validate_image_inputs(
                 detail_image_url,
                 dimensions_reader=dimensions_reader,
             )
+            if format_reader is not None:
+                validate_image_format(detail_image_url, format_reader=format_reader)
         except ValueError as error:
             logger.warning(
                 "Skipping invalid product detail image: index=%s url=%s reason=%s",
