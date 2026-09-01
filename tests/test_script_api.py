@@ -41,7 +41,8 @@ class FakeScriptClient:
 
 class ScriptApiTests(unittest.TestCase):
     @patch("app.api.v1.script.build_script_client")
-    def test_generates_script_from_http_body(self, build_client):
+    @patch("app.api.v1.script.validate_product_image_inputs")
+    def test_generates_script_from_http_body(self, _validate_images, build_client):
         client = FakeScriptClient()
         build_client.return_value = client
         body = ScriptGenerationBody(
@@ -58,6 +59,23 @@ class ScriptApiTests(unittest.TestCase):
         self.assertEqual(client.last_request.image_url, "https://example.com/product.jpg")
         self.assertEqual(client.last_request.reviews, ["거품이 잘 납니다."])
         self.assertEqual(client.last_request.custom_prompt, "30초 이내 광고로 작성")
+
+    @patch("app.api.v1.script.validate_product_image_inputs")
+    @patch("app.api.v1.script.build_script_client")
+    def test_rejects_invalid_product_image_before_openrouter_request(
+        self, build_client, validate_images
+    ):
+        validate_images.side_effect = ValueError(
+            "상품 상세 이미지 1번째가 너무 작습니다: 860x1"
+        )
+        body = ScriptGenerationBody(
+            product={"image_url": "https://example.com/product.jpg"},
+        )
+
+        with self.assertRaisesRegex(Exception, "상품 상세 이미지 1번째"):
+            generate_script(body)
+
+        build_client.assert_not_called()
 
 
 if __name__ == "__main__":

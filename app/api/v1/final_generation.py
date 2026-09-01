@@ -17,6 +17,7 @@ from app.api.v1.video import publish_validated_video, select_video_resolution
 from app.core.config import settings
 from app.db import SQLAlchemySettingsRepository, SessionLocal
 from app.generation_jobs import create_job, get_job, update_job
+from app.image_metadata import validate_image_inputs
 from app.media_combiner import combine_video_and_audio
 from app.runtime_config import (
     build_script_client,
@@ -55,6 +56,23 @@ class FinalGenerationBody(BaseModel):
     channel: str = "Instagram Reels"
     target_audience: str = "육아에 관심 있는 보호자"
 
+
+def validate_product_image_inputs(
+    product: dict[str, Any],
+    image_url: str | None,
+    influencer_image_url: str,
+) -> None:
+    raw_product = product.get("product") if isinstance(product.get("product"), dict) else product
+    primary_image_url = image_url or raw_product.get("image_url") or product.get("image_url")
+    detail_image_urls = raw_product.get("detail_image_urls", [])
+    if not isinstance(detail_image_urls, list):
+        detail_image_urls = []
+    validate_image_inputs(
+        image_url=primary_image_url,
+        influencer_image_url=influencer_image_url,
+        detail_image_urls=detail_image_urls,
+    )
+
 @router.post("/generate", status_code=status.HTTP_202_ACCEPTED, summary="상품 데이터와 스크립트로 전체 릴스 생성 작업 시작")
 def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTasks) -> dict[str, Any]:
     job_id = uuid.uuid4().hex
@@ -62,6 +80,14 @@ def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTask
     image_url = body.image_url or _extract_image_url(body.product)
     if not image_url:
         raise HTTPException(status_code=422, detail="상품 이미지 URL이 필요합니다.")
+    try:
+        validate_product_image_inputs(
+            body.product,
+            image_url,
+            body.influencer_image_url,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     create_job(job_id, input_type=input_type, product=body.product, script=body.script, image_url=image_url)
     background_tasks.add_task(run_generation_job, job_id, body.model_dump())
     return {"job_id": job_id, "status": "PENDING", "status_url": f"/api/v1/reels/generate/{job_id}"}
