@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from json import JSONDecodeError
 from copy import deepcopy
@@ -633,6 +634,18 @@ def validate_dialogue_lengths(
             )
 
 
+def _is_retryable_provider_error(error: OpenRouterRequestError) -> bool:
+    """Retry only provider availability failures, not invalid requests."""
+    message = str(error).lower()
+    if error.status_code in (429, 503):
+        return True
+    if error.status_code == 404:
+        return "no endpoints available" in message
+    if error.status_code == 400:
+        return "provider returned error" in message
+    return False
+
+
 class OpenRouterClient:
     """Small dependency-injectable client for OpenRouter script generation."""
 
@@ -645,9 +658,13 @@ class OpenRouterClient:
         timeout_seconds: int = 60,
         max_attempts: int = 2,
         opener: Callable[..., Any] = urlopen,
+        retry_delay_seconds: float = 2.0,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if max_attempts < 1:
             raise ValueError("max_attempts는 1 이상이어야 합니다.")
+        if retry_delay_seconds < 0:
+            raise ValueError("retry_delay_seconds는 0 이상이어야 합니다.")
         self.api_key = api_key
         self.model = model
         self.fallback_model = fallback_model
@@ -655,6 +672,8 @@ class OpenRouterClient:
         self.timeout_seconds = timeout_seconds
         self.max_attempts = max_attempts
         self.opener = opener
+        self.retry_delay_seconds = retry_delay_seconds
+        self.sleep = sleep
 
     @classmethod
     def from_env(cls) -> "OpenRouterClient":
@@ -686,13 +705,15 @@ class OpenRouterClient:
             except ScriptValidationError as error:
                 last_error = error
             except OpenRouterRequestError as error:
-                if error.status_code not in (429, 503):
+                if not _is_retryable_provider_error(error):
                     raise
                 last_error = error
 
+            if attempt < self.max_attempts - 1:
+                self.sleep(self.retry_delay_seconds)
+
         assert last_error is not None
         raise last_error
-
     def _generate_once(
         self,
         request: ScriptGenerationRequest,

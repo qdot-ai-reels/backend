@@ -98,7 +98,89 @@ class SequentialOpener:
         return FakeResponse(next(self.payloads))
 
 
+class ErrorThenSuccessOpener:
+    def __init__(self, status_code, reason, detail, success_payload):
+        self.status_code = status_code
+        self.reason = reason
+        self.detail = detail
+        self.success_payload = success_payload
+        self.calls = 0
+
+    def __call__(self, request, timeout):
+        self.calls += 1
+        if self.calls == 1:
+            body = json.dumps({"error": {"message": self.detail}}).encode("utf-8")
+            raise HTTPError(
+                request.full_url,
+                self.status_code,
+                self.reason,
+                {},
+                BytesIO(body),
+            )
+        return FakeResponse(self.success_payload)
+
+
 class ScriptGeneratorTests(unittest.TestCase):
+    def test_retries_when_provider_returns_400_error(self):
+        opener = ErrorThenSuccessOpener(
+            400,
+            "Bad Request",
+            "Provider returned error",
+            {"choices": [{"message": {"content": json.dumps(VALID_DOCUMENT)}}]},
+        )
+        sleeps = []
+        client = OpenRouterClient(
+            api_key="test-key",
+            model="openrouter/test",
+            fallback_model=None,
+            opener=opener,
+            sleep=lambda seconds: sleeps.append(seconds),
+        )
+
+        result = client.generate_script(ScriptGenerationRequest(product=PRODUCT))
+
+        self.assertEqual(result, VALID_DOCUMENT)
+        self.assertEqual(opener.calls, 2)
+        self.assertEqual(sleeps, [2.0])
+
+    def test_retries_when_no_image_endpoint_is_available(self):
+        opener = ErrorThenSuccessOpener(
+            404,
+            "Not Found",
+            "No endpoints available matching your guardrail restrictions and data policy",
+            {"choices": [{"message": {"content": json.dumps(VALID_DOCUMENT)}}]},
+        )
+        client = OpenRouterClient(
+            api_key="test-key",
+            model="openrouter/test",
+            fallback_model=None,
+            opener=opener,
+            sleep=lambda _seconds: None,
+        )
+
+        result = client.generate_script(ScriptGenerationRequest(product=PRODUCT))
+
+        self.assertEqual(result, VALID_DOCUMENT)
+        self.assertEqual(opener.calls, 2)
+
+    def test_does_not_retry_unrelated_400_error(self):
+        body = json.dumps({"error": {"code": "invalid_model", "message": "model is unavailable"}}).encode(
+            "utf-8"
+        )
+
+        def failing_opener(request, timeout):
+            raise HTTPError(request.full_url, 400, "Bad Request", {}, BytesIO(body))
+
+        client = OpenRouterClient(
+            api_key="test-key",
+            model="openrouter/test",
+            fallback_model=None,
+            opener=failing_opener,
+            sleep=lambda _seconds: None,
+        )
+
+        with self.assertRaisesRegex(OpenRouterRequestError, "HTTP 400"):
+            client.generate_script(ScriptGenerationRequest(product=PRODUCT))
     def test_selects_longest_supported_duration_under_configured_cap(self):
         self.assertEqual(select_supported_video_duration(15, (5, 10)), 10)
         self.assertEqual(select_supported_video_duration(8, (5, 10)), 5)
