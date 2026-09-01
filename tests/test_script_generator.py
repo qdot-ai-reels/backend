@@ -565,6 +565,26 @@ class ScriptGeneratorTests(unittest.TestCase):
             ["openrouter/free", "fallback/model", "fallback/model"],
         )
 
+    def test_default_attempts_are_five(self):
+        invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
+        del invalid_document["meta"]["language"]
+        opener = SequentialOpener(
+            [{"choices": [{"message": {"content": json.dumps(invalid_document)}}]}] * 4
+            + [{"choices": [{"message": {"content": json.dumps(VALID_DOCUMENT)}}]}]
+        )
+        client = OpenRouterClient(
+            api_key="test-key",
+            model="openrouter/free",
+            fallback_model=None,
+            opener=opener,
+            retry_delay_seconds=0,
+        )
+
+        result = client.generate_script(ScriptGenerationRequest(product=PRODUCT))
+
+        self.assertEqual(result, VALID_DOCUMENT)
+        self.assertEqual(len(opener.requests), 5)
+
     def test_retry_prompt_contains_validation_reason_and_requests_a_complete_script(self):
         invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
         invalid_document["scenes"][0]["time_range_sec"] = {"start": 0, "end": 1}
