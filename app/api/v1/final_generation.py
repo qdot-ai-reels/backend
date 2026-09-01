@@ -118,7 +118,7 @@ def get_generation_file(job_id: str, download: bool = False):
 
 def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
     """Execute the long-running pipeline outside the initial HTTP response."""
-    update_job(job_id, status="PROCESSING")
+    update_job(job_id, status="PROCESSING", stage="TTS_GENERATION")
     session = None
     try:
         service, session = _build_settings_service()
@@ -133,6 +133,7 @@ def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
         audio_path.parent.mkdir(parents=True, exist_ok=True)
         audio_path.write_bytes(audio_content)
 
+        update_job(job_id, stage="VIDEO_GENERATION")
         video_result = _generate_video(
             script,
             image_url,
@@ -144,17 +145,19 @@ def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
             raise RuntimeError("검증된 영상의 로컬 저장 경로를 확인할 수 없습니다.")
         update_job(job_id, video_job_id=video_result.job_id, cost=video_result.total_cost)
 
+        update_job(job_id, stage="AUDIO_MERGE")
         combined_path = LOCAL_COMBINED_OUTPUT_DIR / job_id / "combined.mp4"
         combine_video_and_audio(video_result.storage_path, audio_path, combined_path)
+        update_job(job_id, stage="CAPTION_RENDER")
         caption_result = render_captioned_video_file(script, combined_path)
         output_path = Path(str(caption_result["output_path"]))
         final_root = Path(os.getenv("FINAL_OUTPUT_DIR", "runtime/final")) / job_id
         final_root.mkdir(parents=True, exist_ok=True)
         final_path = final_root / "final.mp4"
         shutil.copy2(output_path, final_path)
-        update_job(job_id, status="COMPLETED", script_json=json.dumps(script, ensure_ascii=False), caption_job_id=str(caption_result["job_id"]), output_path=str(final_path))
+        update_job(job_id, status="COMPLETED", stage="COMPLETED", script_json=json.dumps(script, ensure_ascii=False), caption_job_id=str(caption_result["job_id"]), output_path=str(final_path))
     except Exception as error:
-        update_job(job_id, status="FAILED", error_message=str(error))
+        update_job(job_id, status="FAILED", stage="FAILED", error_message=str(error))
     finally:
         if session is not None:
             session.close()

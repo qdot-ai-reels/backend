@@ -44,6 +44,7 @@ class GenerationJobRow(Base):
 
     job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     status: Mapped[str] = mapped_column(String(32), default="PENDING")
+    stage: Mapped[str | None] = mapped_column(String(32))
     input_type: Mapped[str] = mapped_column(String(32))
     product_json: Mapped[str | None] = mapped_column(Text)
     script_json: Mapped[str | None] = mapped_column(Text)
@@ -78,6 +79,9 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     inspector = inspect(engine)
+    generation_job_columns = {
+        column["name"] for column in inspector.get_columns("generation_jobs")
+    }
     columns = {column["name"] for column in inspector.get_columns("global_settings")}
     missing_columns = {
         "openrouter_script_api_key_encrypted": ("VARCHAR(1024)", "''"),
@@ -93,6 +97,10 @@ def init_db() -> None:
     }
 
     with engine.begin() as connection:
+        if "stage" not in generation_job_columns:
+            connection.execute(
+                text("ALTER TABLE generation_jobs ADD COLUMN stage VARCHAR(32)")
+            )
         if "openrouter_api_key_encrypted" in columns and "openrouter_script_api_key_encrypted" not in columns:
             connection.execute(
                 text(
