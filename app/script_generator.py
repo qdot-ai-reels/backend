@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from json import JSONDecodeError
@@ -205,6 +206,28 @@ class ScriptDialogueLengthError(ScriptValidationError):
         )
 
 
+_VISUAL_TEXT_DISPLAY_PATTERN = re.compile(
+    r"(?:자막|캡션|가격|판매가|할인(?:율)?|cta|문구|텍스트)"
+    r".{0,30}(?:표시|띄우|삽입|노출|보여주|나타내|고정)|"
+    r"(?:표시|띄우|삽입|노출|보여주|나타내|고정)"
+    r".{0,30}(?:자막|캡션|가격|판매가|할인(?:율)?|cta|문구|텍스트)",
+    re.IGNORECASE,
+)
+
+
+def validate_visual_text_policy(scenes: list[Any]) -> None:
+    """Reject generated visual directions that add on-screen marketing text."""
+    for index, scene in enumerate(scenes, start=1):
+        if not isinstance(scene, Mapping):
+            continue
+        visual = scene.get("visual")
+        if isinstance(visual, str) and _VISUAL_TEXT_DISPLAY_PATTERN.search(visual):
+            raise ScriptValidationError(
+                f"{index}번째 scene의 visual에는 자막, 가격, 할인, CTA 또는 텍스트를 "
+                "표시하는 지시를 작성할 수 없습니다."
+            )
+
+
 @dataclass(frozen=True)
 class ScriptGenerationRequest:
     product: Mapping[str, Any]
@@ -292,6 +315,7 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - 상품 이미지의 형태, 색상, 라벨, 용기가 바뀌지 않도록 한다.
 - 영상 내에 포함해야 하는 유일한 텍스트는 상품에 표기된 텍스트이며, 상품 이외의 물체에는 텍스트를 넣지 마세요.
 - 각 장면의 visual은 100자 미만으로 작성하세요.
+- scenes[].visual에는 실제 인물·상품의 행동과 카메라·조명 연출만 작성하세요. 자막, 가격, 할인, CTA 또는 텍스트를 표시하거나 띄우는 내용을 작성하지 마세요.
 - 상품 라벨의 글자와 로고는 식별 가능한 정면 클로즈업으로 보여주지 않는다.
 - 상품 라벨은 화면 바깥으로 일부 잘리거나 손·소품·그림자에 의해 부분적으로 가려지게 하세요.
 - 자막, 가격, 할인율, CTA 문구는 영상에 삽입하지 않는다.
@@ -507,6 +531,7 @@ def validate_script_document(
             )
         previous_end = float(end)
 
+    validate_visual_text_policy(scenes)
     validate_dialogue_lengths(document)
 
     return dict(document)
@@ -596,6 +621,7 @@ def _validate_legacy_script_document(
             raise ScriptValidationError(f"{index}번째 scene의 notes가 필요합니다.")
         previous_end = float(end)
 
+    validate_visual_text_policy(scenes)
     validate_dialogue_lengths(document)
     return dict(document)
 

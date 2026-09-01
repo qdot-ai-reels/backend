@@ -444,6 +444,19 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("자막, 가격, 할인율, CTA 문구는 영상에 삽입하지 않는다", prompt)
         self.assertIn("visual은 100자 미만", prompt)
 
+    def test_rejects_text_display_in_visual_direction(self):
+        invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
+        invalid_document["scenes"][0]["visual"] = "화면 하단에 CTA 문구를 크게 표시한다."
+
+        with self.assertRaisesRegex(ScriptValidationError, "visual.*CTA"):
+            validate_script_document(invalid_document)
+
+    def test_allows_product_action_without_text_display_in_visual(self):
+        document = json.loads(json.dumps(VALID_DOCUMENT))
+        document["scenes"][0]["visual"] = "손이 제품을 집어 화면 중앙에 놓고 카메라가 천천히 push-in한다."
+
+        self.assertEqual(validate_script_document(document), document)
+
     def test_adds_product_image_to_multimodal_message(self):
         request = ScriptGenerationRequest(
             product=PRODUCT,
@@ -514,6 +527,27 @@ class ScriptGeneratorTests(unittest.TestCase):
 
         self.assertEqual(result, VALID_DOCUMENT)
         self.assertEqual(len(opener.requests), 2)
+
+    def test_retries_after_visual_text_policy_failure(self):
+        invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
+        invalid_document["scenes"][0]["visual"] = "화면 하단에 CTA 문구를 크게 표시한다."
+        opener = SequentialOpener([
+            {"choices": [{"message": {"content": json.dumps(invalid_document)}}]},
+            {"choices": [{"message": {"content": json.dumps(VALID_DOCUMENT)}}]},
+        ])
+        client = OpenRouterClient(
+            api_key="test-key",
+            model="test-model",
+            fallback_model="",
+            opener=opener,
+        )
+
+        result = client.generate_script(ScriptGenerationRequest(product=PRODUCT))
+
+        self.assertEqual(result, VALID_DOCUMENT)
+        self.assertEqual(len(opener.requests), 2)
+        retry_prompt = json.loads(opener.requests[1].data)["messages"][0]["content"]
+        self.assertIn("visual에는 자막, 가격, 할인, CTA", retry_prompt)
 
     def test_retries_by_requesting_a_new_complete_script_after_dialogue_failure(self):
         invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
