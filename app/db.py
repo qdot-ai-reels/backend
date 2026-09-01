@@ -28,7 +28,8 @@ class GlobalSettingsRow(Base):
     video_min_resolution: Mapped[str] = mapped_column(String(32), default="720p")
     video_max_resolution: Mapped[str] = mapped_column(String(32), default="1080p")
     video_max_duration_seconds: Mapped[int] = mapped_column(Integer, default=15)
-    script_generation_retries: Mapped[int] = mapped_column(Integer, default=2)
+    # One initial request plus four retries equals five total attempts.
+    script_generation_retries: Mapped[int] = mapped_column(Integer, default=4)
     video_generation_retries: Mapped[int] = mapped_column(Integer, default=2)
     media_combine_retries: Mapped[int] = mapped_column(Integer, default=3)
     mute_original_audio: Mapped[bool] = mapped_column(default=True)
@@ -90,7 +91,7 @@ def init_db() -> None:
         "openrouter_tts_model": ("VARCHAR(255)", "''"),
         "video_min_resolution": ("VARCHAR(32)", "'720p'"),
         "video_max_resolution": ("VARCHAR(32)", "'1080p'"),
-        "script_generation_retries": ("INTEGER", "2"),
+        "script_generation_retries": ("INTEGER", "4"),
         "video_generation_retries": ("INTEGER", "2"),
         "media_combine_retries": ("INTEGER", "3"),
         "openrouter_tts_voice": ("VARCHAR(255)", "''"),
