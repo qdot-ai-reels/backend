@@ -322,10 +322,41 @@ class ScriptGeneratorTests(unittest.TestCase):
             client.generate_script(ScriptGenerationRequest(product=PRODUCT))
 
     def test_uses_free_default_model_when_script_model_environment_variable_is_blank(self):
-        with patch.dict(os.environ, {"OPENROUTER_SCRIPT_MODEL": ""}, clear=False):
+        with patch.dict(
+            os.environ,
+            {"OPENROUTER_SCRIPT_MODEL": "", "OPENROUTER_FALLBACK_MODEL": ""},
+            clear=False,
+        ):
             client = OpenRouterClient.from_env()
 
         self.assertEqual(client.model, "openai/gpt-oss-20b:free")
+        self.assertEqual(client.fallback_model, client.model)
+
+    def test_defaults_fallback_model_to_configured_script_model(self):
+        with patch.dict(
+            os.environ,
+            {
+                "OPENROUTER_SCRIPT_MODEL": "openai/gpt-5.6-luna",
+                "OPENROUTER_FALLBACK_MODEL": "",
+            },
+            clear=False,
+        ):
+            client = OpenRouterClient.from_env()
+
+        self.assertEqual(client.fallback_model, "openai/gpt-5.6-luna")
+
+    def test_preserves_explicit_fallback_model(self):
+        with patch.dict(
+            os.environ,
+            {
+                "OPENROUTER_SCRIPT_MODEL": "openai/gpt-5.6-luna",
+                "OPENROUTER_FALLBACK_MODEL": "openai/gpt-5.4",
+            },
+            clear=False,
+        ):
+            client = OpenRouterClient.from_env()
+
+        self.assertEqual(client.fallback_model, "openai/gpt-5.4")
 
     def test_sends_product_prompt_and_parses_openrouter_response(self):
         response_payload = {

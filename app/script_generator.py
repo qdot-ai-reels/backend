@@ -16,7 +16,6 @@ from urllib.request import Request, urlopen
 
 DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "openai/gpt-oss-20b:free"
-DEFAULT_FALLBACK_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
 DEFAULT_SYLLABLES_PER_SECOND = 4.5
 MAX_SCRIPT_DURATION_SECONDS = 30
 logger = logging.getLogger(__name__)
@@ -785,7 +784,7 @@ class OpenRouterClient:
         self,
         api_key: str,
         model: str,
-        fallback_model: str | None = DEFAULT_FALLBACK_MODEL,
+        fallback_model: str | None = None,
         api_url: str = DEFAULT_API_URL,
         timeout_seconds: int = 60,
         # Keep five total attempts when no database-backed settings are configured.
@@ -810,10 +809,11 @@ class OpenRouterClient:
 
     @classmethod
     def from_env(cls) -> "OpenRouterClient":
+        model = os.getenv("OPENROUTER_SCRIPT_MODEL") or DEFAULT_MODEL
         return cls(
             api_key=os.getenv("OPENROUTER_SCRIPT_API_KEY", ""),
-            model=os.getenv("OPENROUTER_SCRIPT_MODEL") or DEFAULT_MODEL,
-            fallback_model=os.getenv("OPENROUTER_FALLBACK_MODEL") or DEFAULT_FALLBACK_MODEL,
+            model=model,
+            fallback_model=os.getenv("OPENROUTER_FALLBACK_MODEL") or model,
             api_url=os.getenv("OPENROUTER_API_URL") or DEFAULT_API_URL,
         )
 
