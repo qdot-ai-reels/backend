@@ -73,7 +73,7 @@ def get_job(job_id: str) -> dict[str, Any] | None:
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
             "elapsed_seconds": _elapsed_seconds(row.created_at, row.updated_at, row.status),
-            "message": _status_message(row.status, row.stage),
+            "message": _status_message(row.status, row.stage, row.input_type),
         }
 
 
@@ -89,8 +89,10 @@ def _elapsed_seconds(created_at, updated_at, status: str) -> float | None:
     return round(max(0.0, (end - start).total_seconds()), 2)
 
 
-def _status_message(status: str, stage: str | None) -> str:
+def _status_message(status: str, stage: str | None, input_type: str = "video") -> str:
     if status == "COMPLETED":
+        if input_type == "script":
+            return "스크립트 생성이 완료되었습니다."
         return "최종 영상 생성이 완료되었습니다."
     if status == "FAILED":
         return "최종 영상 생성을 완료하지 못했습니다."
