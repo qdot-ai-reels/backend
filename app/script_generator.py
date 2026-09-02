@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ DEFAULT_MODEL = "openai/gpt-oss-20b:free"
 DEFAULT_FALLBACK_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
 DEFAULT_SYLLABLES_PER_SECOND = 4.5
 MAX_SCRIPT_DURATION_SECONDS = 30
+logger = logging.getLogger(__name__)
 
 
 SCRIPT_RESPONSE_SCHEMA = {
@@ -242,6 +244,15 @@ def _http_error_detail(error: HTTPError) -> str:
     if isinstance(provider_error, str):
         return provider_error.strip()[:300]
     return ""
+
+
+def _http_error_request_id(error: HTTPError) -> str | None:
+    """Read a provider request identifier without exposing request content."""
+    for header_name in ("x-request-id", "x-openrouter-request-id", "request-id"):
+        value = error.headers.get(header_name) if error.headers else None
+        if value and value.strip():
+            return value.strip()[:200]
+    return None
 
 
 class ScriptValidationError(OpenRouterError):
@@ -885,12 +896,46 @@ class OpenRouterClient:
             method="POST",
         )
 
+        content = http_request.data or b""
+        image_included = request.image_url is not None
+        logger.info(
+            "script generation request: model=%s endpoint=%s attempt=%d "
+            "image_included=%s image_count=%d payload_bytes=%d",
+            model,
+            self.api_url,
+            attempt + 1,
+            image_included,
+            1 if image_included else 0,
+            len(content),
+        )
+
         try:
             with self.opener(http_request, timeout=self.timeout_seconds) as response:
                 response_body = json.loads(response.read().decode("utf-8"))
+                logger.info(
+                    "script generation response: model=%s attempt=%d status=%s "
+                    "provider=%s response_id=%s",
+                    model,
+                    attempt + 1,
+                    getattr(response, "status", "unknown"),
+                    response_body.get("provider"),
+                    response_body.get("id"),
+                )
         except HTTPError as error:
             detail = _http_error_detail(error)
             suffix = f": {detail}" if detail else ""
+            request_id = _http_error_request_id(error)
+            logger.warning(
+                "script generation provider error: model=%s endpoint=%s "
+                "attempt=%d status=%s image_included=%s request_id=%s detail=%s",
+                model,
+                self.api_url,
+                attempt + 1,
+                error.code,
+                image_included,
+                request_id or "unknown",
+                detail or "unknown",
+            )
             raise OpenRouterRequestError(
                 f"OpenRouter 요청이 거부되었습니다. HTTP {error.code}{suffix}",
                 status_code=error.code,

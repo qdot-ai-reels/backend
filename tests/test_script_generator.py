@@ -212,6 +212,51 @@ class ScriptGeneratorTests(unittest.TestCase):
         ):
             client.generate_script(ScriptGenerationRequest(product=PRODUCT))
 
+    def test_logs_provider_diagnostics_without_request_content(self):
+        body = json.dumps(
+            {
+                "error": {
+                    "code": "no_endpoints",
+                    "message": "No endpoints available matching your guardrail restrictions",
+                }
+            }
+        ).encode("utf-8")
+
+        def failing_opener(request, timeout):
+            raise HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {"x-request-id": "request-123"},
+                BytesIO(body),
+            )
+
+        client = OpenRouterClient(
+            api_key="test-key",
+            model="openrouter/test",
+            fallback_model=None,
+            max_attempts=1,
+            opener=failing_opener,
+        )
+
+        with self.assertLogs("app.script_generator", level="WARNING") as captured:
+            with self.assertRaises(OpenRouterRequestError):
+                client.generate_script(
+                    ScriptGenerationRequest(
+                        product=PRODUCT,
+                        image_url="https://example.com/product.jpg",
+                    )
+                )
+
+        message = "\n".join(captured.output)
+        self.assertIn("model=openrouter/test", message)
+        self.assertIn("attempt=1", message)
+        self.assertIn("image_included=True", message)
+        self.assertIn("request_id=request-123", message)
+        self.assertIn("no_endpoints", message)
+        self.assertNotIn("test-key", message)
+        self.assertNotIn("product.jpg", message)
+
     def test_rejects_script_request_above_product_maximum_duration(self):
         with self.assertRaises(ValueError):
             ScriptGenerationRequest(
