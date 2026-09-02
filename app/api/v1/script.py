@@ -35,6 +35,28 @@ def validate_product_image_inputs(product: dict[str, Any], image_url: str | None
     validate_image_inputs(image_url=primary_image_url)
 
 
+def _script_error_detail(error: Exception) -> dict[str, Any]:
+    message = str(error)
+    if isinstance(error, OpenRouterRequestError) and error.status_code == 404 and "No endpoints available" in message:
+        code = "SCRIPT_PROVIDER_UNAVAILABLE"
+        retryable = True
+    elif isinstance(error, OpenRouterRequestError):
+        code = "SCRIPT_PROVIDER_ERROR"
+        retryable = True
+    elif isinstance(error, ScriptValidationError):
+        code = "SCRIPT_RESPONSE_INVALID"
+        retryable = False
+    else:
+        code = "SCRIPT_GENERATION_FAILED"
+        retryable = False
+    return {
+        "stage": "SCRIPT_GENERATION",
+        "error_code": code,
+        "retryable": retryable,
+        "message": message,
+    }
+
+
 @router.post(
     "/script",
     status_code=status.HTTP_200_OK,
@@ -71,10 +93,10 @@ def generate_script(
     except OpenRouterConfigurationError as error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(error),
+            detail=_script_error_detail(error),
         ) from error
     except (OpenRouterRequestError, ScriptValidationError, ProviderCatalogError, ValueError) as error:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(error),
+            detail=_script_error_detail(error),
         ) from error

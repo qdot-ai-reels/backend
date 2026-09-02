@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import uuid
@@ -34,6 +35,7 @@ from app.video_validation_pipeline import VideoValidationPipeline
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 LOCAL_COMBINED_OUTPUT_DIR = Path(os.getenv("COMBINED_VIDEO_OUTPUT_DIR", "runtime/combined"))
 # Keep one provider job alive long enough for late completions. The frontend
 # polls independently, so this does not block the initial HTTP response.
@@ -120,7 +122,15 @@ def get_generation_file(job_id: str, download: bool = False):
 
 def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
     """Execute the long-running pipeline outside the initial HTTP response."""
-    update_job(job_id, status="PROCESSING", stage="TTS_GENERATION")
+    current_stage = "TTS_GENERATION"
+    update_job(job_id, status="PROCESSING", stage=current_stage)
+
+    def set_stage(stage: str) -> None:
+        nonlocal current_stage
+        current_stage = stage
+        logger.warning("generation job stage: job_id=%s stage=%s", job_id, stage)
+        update_job(job_id, stage=stage)
+
     session = None
     try:
         service, session = _build_settings_service()
@@ -128,14 +138,18 @@ def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
         image_url = payload.get("image_url") or _extract_image_url(payload.get("product"))
         influencer_image_url = payload.get("influencer_image_url")
         script, audio_content = _generate_narration_with_script_regeneration(
-            payload, script, service
+            payload,
+            script,
+            service,
+            set_stage=set_stage,
         )
         update_job(job_id, script_json=json.dumps(script, ensure_ascii=False))
         audio_path = Path("runtime/tts") / job_id / "narration.mp3"
         audio_path.parent.mkdir(parents=True, exist_ok=True)
         audio_path.write_bytes(audio_content)
 
-        update_job(job_id, stage="VIDEO_GENERATION")
+        current_stage = "VIDEO_GENERATION"
+        update_job(job_id, stage=current_stage)
         video_result = _generate_video(
             script,
             image_url,
@@ -148,10 +162,12 @@ def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
             raise RuntimeError("검증된 영상의 로컬 저장 경로를 확인할 수 없습니다.")
         update_job(job_id, video_job_id=video_result.job_id, cost=video_result.total_cost)
 
-        update_job(job_id, stage="AUDIO_MERGE")
+        current_stage = "AUDIO_MERGE"
+        update_job(job_id, stage=current_stage)
         combined_path = LOCAL_COMBINED_OUTPUT_DIR / job_id / "combined.mp4"
         combine_video_and_audio(video_result.storage_path, audio_path, combined_path)
-        update_job(job_id, stage="CAPTION_RENDER")
+        current_stage = "CAPTION_RENDER"
+        update_job(job_id, stage=current_stage)
         caption_result = render_captioned_video_file(script, combined_path)
         output_path = Path(str(caption_result["output_path"]))
         final_root = Path(os.getenv("FINAL_OUTPUT_DIR", "runtime/final")) / job_id
@@ -160,7 +176,18 @@ def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
         shutil.copy2(output_path, final_path)
         update_job(job_id, status="COMPLETED", stage="COMPLETED", script_json=json.dumps(script, ensure_ascii=False), caption_job_id=str(caption_result["job_id"]), output_path=str(final_path))
     except Exception as error:
-        update_job(job_id, status="FAILED", stage="FAILED", error_message=str(error))
+        logger.warning(
+            "generation job failed: job_id=%s stage=%s error=%s",
+            job_id,
+            current_stage,
+            error,
+        )
+        update_job(
+            job_id,
+            status="FAILED",
+            stage=current_stage,
+            error_message=str(error),
+        )
     finally:
         if session is not None:
             session.close()
@@ -170,6 +197,7 @@ def _generate_narration_with_script_regeneration(
     payload: dict[str, Any],
     script: dict[str, Any],
     service: SettingsService | None,
+    set_stage: Any | None = None,
 ) -> tuple[dict[str, Any], bytes]:
     """Validate TTS before video generation and regenerate scripts on overflow."""
     if not isinstance(payload.get("product"), dict):
@@ -181,11 +209,15 @@ def _generate_narration_with_script_regeneration(
     )
     current_script = script
     for regeneration in range(MAX_SCRIPT_REGENERATIONS + 1):
+        if set_stage is not None:
+            set_stage("TTS_GENERATION")
         try:
             return current_script, tts_client.generate_narration(current_script)
         except SceneAudioDurationError as error:
             if regeneration >= MAX_SCRIPT_REGENERATIONS:
                 raise
+            if set_stage is not None:
+                set_stage("SCRIPT_REGENERATION")
             current_script = _generate_script(
                 payload,
                 service,

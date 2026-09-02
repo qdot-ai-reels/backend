@@ -13,11 +13,44 @@ from app.api.v1.final_generation import (
     _generate_video,
     router,
 )
+from app.generation_jobs import _error_metadata, _status_message
 from app.tts_generator import SceneAudioDurationError
 from app.settings_service import VideoModelCapabilities
 
 
 class FinalGenerationApiTests(unittest.TestCase):
+    def test_status_metadata_identifies_script_provider_failure(self):
+        self.assertEqual(
+            _error_metadata(
+                "FAILED",
+                "SCRIPT_GENERATION",
+                "OpenRouter 요청이 거부되었습니다. HTTP 404: No endpoints available",
+            ),
+            ("SCRIPT_PROVIDER_UNAVAILABLE", True),
+        )
+
+    def test_status_metadata_identifies_video_input_failure(self):
+        self.assertEqual(
+            _error_metadata("FAILED", "VIDEO_GENERATION", "이미지 format is not supported"),
+            ("VIDEO_INPUT_INVALID", False),
+        )
+
+    def test_status_message_identifies_script_regeneration(self):
+        self.assertEqual(
+            _status_message("PROCESSING", "SCRIPT_REGENERATION"),
+            "음성 길이에 맞게 스크립트를 다시 생성하고 있습니다.",
+        )
+
+    def test_failure_keeps_the_stage_that_failed(self):
+        self.assertEqual(
+            _error_metadata(
+                "FAILED",
+                "TTS_GENERATION",
+                "3번째 장면 음성이 너무 깁니다.",
+            ),
+            ("TTS_SCENE_TOO_LONG", True),
+        )
+
     def test_background_video_wait_allows_late_completion(self):
         self.assertEqual(BACKGROUND_VIDEO_MAX_WAIT_SECONDS, 18 * 60)
         self.assertEqual(BACKGROUND_VIDEO_MAX_POLL_ATTEMPTS, 216)
