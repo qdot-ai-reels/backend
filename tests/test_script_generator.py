@@ -317,6 +317,31 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("프랭클린", body["messages"][0]["content"])
         self.assertIn("4.5음절", body["messages"][0]["content"])
 
+    def test_can_omit_response_format_for_provider_diagnosis(self):
+        response_payload = {
+            "choices": [{
+                "message": {
+                    "content": json.dumps(VALID_DOCUMENT, ensure_ascii=False)
+                }
+            }]
+        }
+        captured = {}
+
+        def fake_opener(request, timeout):
+            captured["request"] = request
+            return FakeResponse(response_payload)
+
+        with patch.dict(os.environ, {"OPENROUTER_SCRIPT_USE_RESPONSE_FORMAT": "false"}):
+            client = OpenRouterClient(
+                api_key="test-key",
+                model="openai/gpt-5.6-luna",
+                opener=fake_opener,
+            )
+            result = client.generate_script(ScriptGenerationRequest(product=PRODUCT))
+
+        self.assertEqual(result, VALID_DOCUMENT)
+        self.assertNotIn("response_format", json.loads(captured["request"].data))
+
     def test_prompt_uses_structured_output_without_video_settings_in_meta(self):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
 

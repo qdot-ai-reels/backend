@@ -18,6 +18,7 @@ DEFAULT_MODEL = "openai/gpt-oss-20b:free"
 DEFAULT_FALLBACK_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
 DEFAULT_SYLLABLES_PER_SECOND = 4.5
 MAX_SCRIPT_DURATION_SECONDS = 30
+STRICT_SCHEMA_ENV = "OPENROUTER_SCRIPT_USE_RESPONSE_FORMAT"
 
 
 SCRIPT_RESPONSE_SCHEMA = {
@@ -747,14 +748,6 @@ class OpenRouterClient:
             "temperature": 0.2,
             "max_tokens": 2000,
             "reasoning": {"exclude": True},
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "reels_script",
-                    "strict": True,
-                    "schema": SCRIPT_RESPONSE_SCHEMA,
-                },
-            },
             "messages": [{
                 "role": "user",
                 "content": build_script_message_content(
@@ -763,6 +756,21 @@ class OpenRouterClient:
                 ),
             }],
         }
+        # Keep Structured Output enabled by default. This switch is only for
+        # diagnosing providers that reject response_format routing.
+        if os.getenv(STRICT_SCHEMA_ENV, "true").strip().lower() not in {
+            "false",
+            "0",
+            "no",
+        }:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "reels_script",
+                    "strict": True,
+                    "schema": SCRIPT_RESPONSE_SCHEMA,
+                },
+            }
         http_request = Request(
             self.api_url,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
