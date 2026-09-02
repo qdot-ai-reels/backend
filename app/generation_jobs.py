@@ -56,6 +56,7 @@ def get_job(job_id: str) -> dict[str, Any] | None:
         row = session.get(GenerationJobRow, job_id)
         if row is None:
             return None
+        error_code, retryable = _error_metadata(row.status, row.stage, row.error_message)
         return {
             "job_id": row.job_id,
             "status": row.status,
@@ -66,6 +67,8 @@ def get_job(job_id: str) -> dict[str, Any] | None:
             "caption_job_id": row.caption_job_id,
             "output_path": row.output_path,
             "error": row.error_message,
+            "error_code": error_code,
+            "retryable": retryable,
             "cost": row.cost,
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
@@ -93,8 +96,44 @@ def _status_message(status: str, stage: str | None) -> str:
         return "최종 영상 생성을 완료하지 못했습니다."
     return {
         "QUEUED": "생성 작업을 준비하고 있습니다.",
+        "SCRIPT_GENERATION": "스크립트를 생성하고 있습니다.",
+        "SCRIPT_REGENERATION": "음성 길이에 맞게 스크립트를 다시 생성하고 있습니다.",
         "TTS_GENERATION": "음성을 생성하고 있습니다.",
+        "TTS_VALIDATION": "장면별 음성 길이를 확인하고 있습니다.",
         "VIDEO_GENERATION": "영상 생성 서버에서 영상을 만들고 있습니다.",
         "AUDIO_MERGE": "영상과 음성을 결합하고 있습니다.",
         "CAPTION_RENDER": "Caption을 적용하고 있습니다.",
     }.get(stage or "", "최종 영상을 생성하고 있습니다.")
+
+
+def _error_metadata(
+    status: str, stage: str | None, error_message: str | None
+) -> tuple[str | None, bool | None]:
+    """Return stable UI metadata without changing the existing DB schema."""
+    if status != "FAILED":
+        return None, None
+
+    message = (error_message or "").lower()
+    if stage in {"SCRIPT_GENERATION", "SCRIPT_REGENERATION"}:
+        if "no endpoints available" in message:
+            return "SCRIPT_PROVIDER_UNAVAILABLE", True
+        if "openrouter" in message:
+            return "SCRIPT_PROVIDER_ERROR", True
+        return "SCRIPT_GENERATION_FAILED", False
+    if stage in {"TTS_GENERATION", "TTS_VALIDATION"}:
+        if "음성이 너무 깁니다" in (error_message or ""):
+            return "TTS_SCENE_TOO_LONG", True
+        return "TTS_GENERATION_FAILED", False
+    if stage == "VIDEO_GENERATION":
+        if "no endpoints available" in message:
+            return "VIDEO_PROVIDER_UNAVAILABLE", True
+        if "시간이 초과" in (error_message or "") or "timeout" in message:
+            return "VIDEO_PROVIDER_TIMEOUT", True
+        if "이미지" in (error_message or "") or "format" in message:
+            return "VIDEO_INPUT_INVALID", False
+        return "VIDEO_GENERATION_FAILED", False
+    if stage == "AUDIO_MERGE":
+        return "AUDIO_MERGE_FAILED", False
+    if stage == "CAPTION_RENDER":
+        return "CAPTION_RENDER_FAILED", False
+    return "GENERATION_FAILED", False
