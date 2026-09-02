@@ -47,6 +47,18 @@ BACKGROUND_VIDEO_MAX_POLL_ATTEMPTS = (
 MAX_SCRIPT_REGENERATIONS = 5
 
 
+def _script_duration_seconds(script: dict[str, Any]) -> int | None:
+    """Recover the initial duration when older clients omit it from the payload."""
+    video = script.get("video")
+    if not isinstance(video, dict):
+        return None
+    try:
+        duration = int(video.get("video_duration"))
+    except (TypeError, ValueError):
+        return None
+    return duration if 1 <= duration <= 30 else None
+
+
 class FinalGenerationBody(BaseModel):
     """Accept product context together with the script to be rendered."""
 
@@ -208,6 +220,11 @@ def _generate_narration_with_script_regeneration(
         retry_duration_errors=False,
     )
     current_script = script
+    regeneration_payload = dict(payload)
+    if regeneration_payload.get("max_duration_seconds") is None:
+        inferred_duration = _script_duration_seconds(current_script)
+        if inferred_duration is not None:
+            regeneration_payload["max_duration_seconds"] = inferred_duration
     for regeneration in range(MAX_SCRIPT_REGENERATIONS + 1):
         if set_stage is not None:
             set_stage("TTS_GENERATION")
@@ -219,7 +236,7 @@ def _generate_narration_with_script_regeneration(
             if set_stage is not None:
                 set_stage("SCRIPT_REGENERATION")
             current_script = _generate_script(
-                payload,
+                regeneration_payload,
                 service,
                 retry_error=error,
             )

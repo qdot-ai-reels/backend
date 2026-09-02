@@ -11,6 +11,7 @@ from app.api.v1.final_generation import (
     FinalGenerationBody,
     _generate_narration_with_script_regeneration,
     _generate_video,
+    _script_duration_seconds,
     router,
 )
 from app.generation_jobs import _error_metadata, _status_message
@@ -19,6 +20,15 @@ from app.settings_service import VideoModelCapabilities
 
 
 class FinalGenerationApiTests(unittest.TestCase):
+    def test_infers_duration_from_script_when_missing(self):
+        self.assertEqual(
+            _script_duration_seconds({"video": {"video_duration": "6"}}),
+            6,
+        )
+
+    def test_ignores_invalid_script_duration(self):
+        self.assertIsNone(_script_duration_seconds({"video": {"video_duration": "15s"}}))
+
     def test_status_metadata_identifies_script_provider_failure(self):
         self.assertEqual(
             _error_metadata(
@@ -165,6 +175,29 @@ class FinalGenerationApiTests(unittest.TestCase):
         generate_script.assert_called_once()
         self.assertIs(generate_script.call_args.kwargs["retry_error"], duration_error)
         self.assertFalse(tts_client_class.call_args.kwargs["retry_duration_errors"])
+
+    @patch("app.api.v1.final_generation._generate_script")
+    @patch("app.api.v1.final_generation.OpenRouterTTSClient")
+    def test_script_regeneration_preserves_initial_duration_when_payload_omits_it(
+        self, tts_client_class, generate_script
+    ):
+        initial_script = {"video": {"video_duration": "6"}, "scenes": []}
+        tts_client_class.return_value.generate_narration.side_effect = [
+            SceneAudioDurationError(1, 2.0, 2.45),
+            b"valid-audio",
+        ]
+        generate_script.return_value = initial_script
+
+        _generate_narration_with_script_regeneration(
+            payload={"product": {"name": "상품"}},
+            script=initial_script,
+            service=None,
+        )
+
+        self.assertEqual(
+            generate_script.call_args.args[0]["max_duration_seconds"],
+            6,
+        )
 
     @patch("app.api.v1.final_generation.validate_product_image_inputs")
     @patch("app.api.v1.final_generation.create_job")
