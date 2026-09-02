@@ -352,6 +352,38 @@ class VideoGeneratorTests(unittest.TestCase):
             ],
         )
 
+    def test_logs_safe_video_request_diagnostics(self):
+        opener = SequentialOpener([
+            {"id": "job-1", "polling_url": "https://example.com/poll/job-1"},
+            {"id": "job-1", "status": "completed", "unsigned_urls": ["https://example.com/video.mp4"]},
+        ])
+        client = OpenRouterVideoClient(
+            api_key="secret-key",
+            model="alibaba/wan-3.0",
+            opener=opener,
+            sleeper=lambda _seconds: None,
+            image_dimensions_reader=self.image_dimensions_reader,
+        )
+
+        with self.assertLogs("app.video_generator", level="INFO") as captured:
+            client.generate_video(
+                VideoGenerationRequest(
+                    script=SCRIPT,
+                    image_url="https://shop.example/product.jpg",
+                    influencer_image_url="https://images.example/influencer.jpg",
+                    detail_image_urls=("https://cdn.example/detail.webp",),
+                )
+            )
+
+        logs = "\n".join(captured.output)
+        self.assertIn("video generation request:", logs)
+        self.assertIn("model=alibaba/wan-3.0", logs)
+        self.assertIn("reference_count=3", logs)
+        self.assertIn("reference_order=influencer,product,detail", logs)
+        self.assertIn("reference_domains=images.example,shop.example,cdn.example", logs)
+        self.assertNotIn("secret-key", logs)
+        self.assertNotIn("product.jpg", logs)
+
     def test_skips_invalid_product_detail_images_before_submission(self):
         opener = SequentialOpener([
             {"id": "job-1", "polling_url": "https://example.com/poll/job-1"},
