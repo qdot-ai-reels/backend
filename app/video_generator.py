@@ -252,7 +252,7 @@ class OpenRouterVideoClient:
             submit_payload.update(_video_image_payload(self.model, request.image_url))
 
         diagnostics = _video_request_diagnostics(submit_payload)
-        logger.info(
+        logger.warning(
             "video generation request: model=%s duration=%ss resolution=%s "
             "aspect_ratio=%s reference_count=%s reference_order=%s "
             "reference_domains=%s",

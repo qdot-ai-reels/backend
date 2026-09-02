@@ -365,7 +365,7 @@ class VideoGeneratorTests(unittest.TestCase):
             image_dimensions_reader=self.image_dimensions_reader,
         )
 
-        with self.assertLogs("app.video_generator", level="INFO") as captured:
+        with self.assertLogs("app.video_generator", level="WARNING") as captured:
             client.generate_video(
                 VideoGenerationRequest(
                     script=SCRIPT,
