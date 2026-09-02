@@ -2,6 +2,7 @@ import http from "node:http";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 
 const port = Number(process.env.HYPERFRAMES_RUNNER_PORT || 8787);
 const workspace = path.resolve(process.env.HYPERFRAMES_WORKSPACE || "/workspace");
@@ -16,8 +17,9 @@ function isInsideWorkspace(candidate) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function runHyperFrames(args) {
+function runHyperFrames(phase, args) {
   return new Promise((resolve, reject) => {
+    const startedAt = performance.now();
     const child = spawn("hyperframes", args, { cwd: workspace });
     let stdout = "";
     let stderr = "";
@@ -25,6 +27,16 @@ function runHyperFrames(args) {
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("error", reject);
     child.on("close", (code) => {
+      const durationMs = Math.round(performance.now() - startedAt);
+      console.log(JSON.stringify({
+        event: "hyperframes_command",
+        phase,
+        args,
+        exitCode: code,
+        durationMs,
+        stdoutTail: stdout.trim().slice(-4000),
+        stderrTail: stderr.trim().slice(-4000),
+      }));
       if (code === 0) {
         resolve({ stdout, stderr });
       } else {
@@ -73,8 +85,8 @@ const server = http.createServer(async (request, response) => {
     }
 
     const jobId = randomUUID();
-    await runHyperFrames(["check", projectPath, "--json"]);
-    await runHyperFrames(["render", projectPath, "--output", outputPath, "--quality", "draft", "--workers", "1"]);
+    await runHyperFrames("check", ["check", projectPath, "--json"]);
+    await runHyperFrames("render", ["render", projectPath, "--output", outputPath, "--quality", "draft", "--workers", "1"]);
     sendJson(response, 200, {
       job_id: jobId,
       status: "completed",
