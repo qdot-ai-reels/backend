@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from json import JSONDecodeError
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from app.image_metadata import (
@@ -250,6 +251,19 @@ class OpenRouterVideoClient:
         else:
             submit_payload.update(_video_image_payload(self.model, request.image_url))
 
+        diagnostics = _video_request_diagnostics(submit_payload)
+        logger.info(
+            "video generation request: model=%s duration=%ss resolution=%s "
+            "aspect_ratio=%s reference_count=%s reference_order=%s "
+            "reference_domains=%s",
+            self.model,
+            duration_seconds,
+            request.resolution,
+            request.aspect_ratio,
+            diagnostics["reference_count"],
+            diagnostics["reference_order"],
+            diagnostics["reference_domains"],
+        )
         submit_response = self._request_json(
             method="POST",
             url=self.api_url,
@@ -384,6 +398,12 @@ class OpenRouterVideoClient:
             except (JSONDecodeError, UnicodeDecodeError):
                 provider_detail = ""
 
+            logger.warning(
+                "video provider request failed: method=%s status=%s message=%s",
+                method,
+                error.code,
+                provider_detail[:500] or "(no provider message)",
+            )
             detail_suffix = f": {provider_detail[:500]}" if provider_detail else ""
             raise OpenRouterRequestError(
                 f"OpenRouter 영상 요청이 거부되었습니다. HTTP {error.code}{detail_suffix}",
@@ -423,3 +443,31 @@ def _video_image_payload(model: str, image_url: str) -> dict[str, list[dict[str,
             "frame_images": [{**image, "frame_type": "first_frame"}],
         }
     return {"input_references": [image]}
+
+
+def _video_request_diagnostics(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Summarize image inputs without logging credentials or full URLs."""
+    if "frame_images" in payload:
+        references = payload.get("frame_images") or []
+        reference_order = ["product"] * len(references)
+    else:
+        references = payload.get("input_references") or []
+        if len(references) >= 2:
+            reference_order = ["influencer", "product"] + [
+                "detail"
+            ] * (len(references) - 2)
+        else:
+            reference_order = ["product"] * len(references)
+
+    domains = []
+    for reference in references:
+        image = reference.get("image_url") if isinstance(reference, Mapping) else None
+        url = image.get("url") if isinstance(image, Mapping) else None
+        hostname = urlsplit(str(url)).hostname if url else None
+        domains.append(hostname or "unknown")
+
+    return {
+        "reference_count": len(references),
+        "reference_order": ",".join(reference_order) or "none",
+        "reference_domains": ",".join(domains) or "none",
+    }
