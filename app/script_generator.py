@@ -39,7 +39,10 @@ SCRIPT_RESPONSE_SCHEMA = {
             "additionalProperties": False,
             "required": ["usp"],
             "properties": {
-                "usp": {"type": "string"},
+                "usp": {
+                    "type": "string",
+                    "description": "상품의 Unique Selling Point. 입력된 값은 그대로 사용하고, 없으면 상품정보로 추론",
+                },
             },
         },
         "customer": {
@@ -47,8 +50,14 @@ SCRIPT_RESPONSE_SCHEMA = {
             "additionalProperties": False,
             "required": ["main_target", "pain_point"],
             "properties": {
-                "main_target": {"type": ["string", "null"]},
-                "pain_point": {"type": ["string", "null"]},
+                "main_target": {
+                    "type": ["string", "null"],
+                    "description": "상품의 메인 타겟 고객",
+                },
+                "pain_point": {
+                    "type": ["string", "null"],
+                    "description": "타겟 고객의 고민",
+                },
             },
         },
         "ads": {
@@ -63,23 +72,34 @@ SCRIPT_RESPONSE_SCHEMA = {
                 "main_target",
             ],
             "properties": {
-                "goal": {"type": ["string", "null"]},
-                "cta_action": {"type": "string"},
-                "channel_platform": {"type": "string"},
-                "main_target": {"type": ["string", "null"]},
+                "goal": {"type": ["string", "null"], "description": "광고 목표. 없으면 null"},
+                "cta_action": {"type": "string", "description": "광고를 본 사용자가 할 행동"},
+                "channel_platform": {"type": "string", "description": "광고가 업로드되는 채널"},
+                "main_target": {"type": ["string", "null"], "description": "광고의 메인 타겟"},
                 "ad_planner": {
                     "type": "object",
                     "additionalProperties": False,
                     "required": ["persona"],
-                    "properties": {"persona": {"type": ["string", "null"]}},
+                    "properties": {
+                        "persona": {
+                            "type": ["string", "null"],
+                            "description": "광고 영상 기획자의 특성. 없으면 null",
+                        }
+                    },
                 },
                 "speaker": {
                     "type": "object",
                     "additionalProperties": False,
                     "required": ["persona", "tone"],
                     "properties": {
-                        "persona": {"type": ["string", "null"]},
-                        "tone": {"type": ["string", "null"]},
+                        "persona": {
+                            "type": ["string", "null"],
+                            "description": "화자의 성격·특성·가치관. 외형 묘사는 금지하며 없으면 null",
+                        },
+                        "tone": {
+                            "type": ["string", "null"],
+                            "description": "광고 영상에 어울리는 화자의 말투. 없으면 null",
+                        },
                     },
                 },
             },
@@ -93,9 +113,15 @@ SCRIPT_RESPONSE_SCHEMA = {
                 "forbidden_scenes_elements",
             ],
             "properties": {
-                "video_duration": {"type": "string"},
-                "required_scenes_elements": {"type": ["string", "null"]},
-                "forbidden_scenes_elements": {"type": ["string", "null"]},
+                "video_duration": {"type": "string", "description": "생성하는 광고 영상의 길이"},
+                "required_scenes_elements": {
+                    "type": ["string", "null"],
+                    "description": "반드시 포함할 시각·소품·연출 요소. 없으면 null",
+                },
+                "forbidden_scenes_elements": {
+                    "type": ["string", "null"],
+                    "description": "절대 포함하지 않을 시각·소품·연출 요소. 없으면 null",
+                },
             },
         },
         "scenes": {
@@ -113,28 +139,52 @@ SCRIPT_RESPONSE_SCHEMA = {
                     "notes",
                 ],
                 "properties": {
-                    "section": {"type": "string"},
+                    "section": {"type": "string", "description": "영상의 부분 파트"},
                     "time_range_sec": {
                         "type": "object",
                         "additionalProperties": False,
                         "required": ["start", "end"],
                         "properties": {
-                            "start": {"type": "number", "minimum": 0},
-                            "end": {"type": "number", "exclusiveMinimum": 0},
+                            "start": {
+                                "type": "number",
+                                "minimum": 0,
+                                "description": "장면 시작 시간(초)",
+                            },
+                            "end": {
+                                "type": "number",
+                                "exclusiveMinimum": 0,
+                                "description": "장면 종료 시간(초)",
+                            },
                         },
                     },
-                    "visual": {"type": "string"},
+                    "visual": {
+                        "type": "string",
+                        "maxLength": 99,
+                        "description": "영상 장면의 시각 요소 설명. 글자 수 100자 미만",
+                    },
                     "auditory": {
                         "type": "object",
                         "additionalProperties": False,
                         "required": ["subtitle", "voiceover"],
                         "properties": {
-                            "subtitle": {"type": ["string", "null"]},
-                            "voiceover": {"type": ["string", "null"]},
+                            "subtitle": {
+                                "type": ["string", "null"],
+                                "description": "영상 장면의 Caption(텍스트 애니메이션)",
+                            },
+                            "voiceover": {
+                                "type": ["string", "null"],
+                                "description": "영상 장면의 목소리 추가",
+                            },
                         },
                     },
-                    "intent": {"type": "string"},
-                    "notes": {"type": ["string", "null"]},
+                    "intent": {
+                        "type": "string",
+                        "description": "영상 장면의 연출 의도 설명",
+                    },
+                    "notes": {
+                        "type": ["string", "null"],
+                        "description": "영상 장면의 기타 추가 설명. 없으면 null",
+                    },
                 },
             },
         },
@@ -143,8 +193,14 @@ SCRIPT_RESPONSE_SCHEMA = {
             "additionalProperties": False,
             "required": ["additional_information", "video_ads_methodology"],
             "properties": {
-                "additional_information": {"type": ["string", "null"]},
-                "video_ads_methodology": {"type": ["string", "null"]},
+                "additional_information": {
+                    "type": ["string", "null"],
+                    "description": "사용자가 입력한 추가사항. 없으면 null",
+                },
+                "video_ads_methodology": {
+                    "type": ["string", "null"],
+                    "description": "광고 영상에 활용할 방법론. 없으면 null",
+                },
             },
         },
     },
@@ -251,17 +307,59 @@ def prepare_product_for_prompt(product: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _format_product_prompt_value(value: Any) -> str:
+    """Render labeled product fields without losing structured values."""
+    if value is None:
+        return "null"
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def build_product_prompt_fields(
+    product: Mapping[str, Any], reviews: list[Any] | None
+) -> str:
+    """Render the explicit product fields required by the team prompt."""
+    field_values = {
+        "Selling Point": product.get("selling_point", product.get("selling_points")),
+        "USP(Unique Selling Point)": product.get("usp"),
+        "Curator Pitch": product.get("curator_pitch"),
+        "Hashtags": product.get("hashtags"),
+        "Description Text": product.get("description_text"),
+        "Detail Info": product.get("detail_info"),
+        "Reviews": product.get("reviews", reviews or []),
+    }
+    return "\n".join(
+        f"- {label}: {_format_product_prompt_value(value)}"
+        for label, value in field_values.items()
+    )
+
+
+def extract_cta_action(custom_prompt: str) -> str:
+    """Extract the CTA value from the team's `CTA: ...` input convention."""
+    for line in custom_prompt.splitlines():
+        label, separator, value = line.partition(":")
+        if separator and label.strip().lower() in {"cta", "cta action"}:
+            return value.strip() or "null"
+    return "null"
+
+
 def build_script_prompt(request: ScriptGenerationRequest) -> str:
     """Build a constrained prompt from product data supplied by the caller."""
     usp = request.product.get("usp")
     has_usp = usp is not None and (not isinstance(usp, str) or bool(usp.strip()))
-    product_json = json.dumps(
-        prepare_product_for_prompt(request.product),
-        ensure_ascii=False,
-        indent=2,
-    )
-    reviews_json = json.dumps(request.reviews or [], ensure_ascii=False, indent=2)
+    # Legacy full JSON context is intentionally disabled to follow the Notion
+    # prompt's explicitly listed product fields. Keep the code here as a
+    # reference in case the team later decides to restore the fallback.
+    # product_json = json.dumps(
+    #     prepare_product_for_prompt(request.product),
+    #     ensure_ascii=False,
+    #     indent=2,
+    # )
+    # reviews_json = json.dumps(request.reviews or [], ensure_ascii=False, indent=2)
+    product_prompt_fields = build_product_prompt_fields(request.product, request.reviews)
     custom_prompt = request.custom_prompt.strip() if request.custom_prompt else ""
+    cta_action = extract_cta_action(custom_prompt)
     custom_instruction = (
         "- 아래 추가 프롬프트의 지시도 반영하세요.\n"
         f"추가 프롬프트: {custom_prompt}"
@@ -272,6 +370,8 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 
 아래 상품 데이터에 실제로 포함된 정보만 사용해 {request.channel}용 스크립트를 작성하세요.
 확인되지 않은 효능, 인증, 소재, 가격, 할인, 사용 후기 또는 제품 특징을 추측해서 추가하지 마세요.
+과대광고성 문구(효능 과장, 근거 없는 내용 등)를 포함하지 마세요.
+지나치게 과장하지 말아야 하며, 실제 사용자의 사용담처럼 허위 경험이 들어가면 안 됩니다.
 상품 데이터에 없는 정보는 빈 문자열 또는 빈 배열로 두세요.
 
 필수 조건:
@@ -279,9 +379,15 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - 최대 {request.max_duration_seconds}초
 - 선택한 광고 방법론을 적용하고 마지막 장면에 CTA를 포함
 - 사용할 수 있는 광고 방법론: Hook-Body-CTA, PAS, AIDA, BAB(Before-After-Bridge), 4Ps(Promise-Picture-Proof-Push)
-- Anti-Slop Prompt For Video를 선택하는 경우 과도하게 인공적인 표현을 줄이고 제품 사용 흔적(signs of use)을 자연스럽게 반영하세요.
+- Anti-Slop Prompt For Video를 선택하는 경우 과도하게 인공적인 표현을 줄이고 아래 불완전성을 자연스럽게 반영하세요.
+- Product: signs of use(제품 사용 흔적)
+- Camera: slight handheld motion(약간의 핸드헬드 움직임)
+- People: imperfect skin texture(고르지 않은 피부결), subtle blemishes(미세한 잡티), wrinkled fabric(주름진 옷감), natural and subtle asymmetry(자연스럽고 미세한 비대칭)
 - 장면마다 하나의 핵심 행동
 - 영상 없이 자막만 읽어도 이해 가능
+- 숏폼의 첫 1~3초 안에 소비자의 문제나 관심사를 바로 제시하세요.
+- 상품이 어떤 상황에서 왜 좋은지 보여주세요.
+- 상품의 기능이나 사용 장면처럼 소비자가 판단할 수 있는 정보를 포함하세요.
 - 첫 장면은 시선을 끌고, 마지막 장면은 구체적인 CTA를 포함
 - 자막은 짧게 작성하고 화면에 넣을 문구와 내레이션을 구분
 - 대사는 장면 시간 안에 읽을 수 있도록 작성하고, 평균 1초당 4.5음절을 기준으로 계산
@@ -295,7 +401,7 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - 상품 라벨의 글자와 로고는 식별 가능한 정면 클로즈업으로 보여주지 않는다.
 - 상품 라벨은 화면 바깥으로 일부 잘리거나 손·소품·그림자에 의해 부분적으로 가려지게 하세요.
 - 자막, 가격, 할인율, CTA 문구는 영상에 삽입하지 않는다.
-- 유저가 프롬프트를 통해 해당 상품정보를 입력해주었다면 해당 내용을 반영하세요.
+- 유저가 프롬프트를 통해 해당 상품정보를 입력해주었다면, 상품 정보가 비어 있더라도 그 정보로 빈 상품 정보를 채워 반영하세요.
 {custom_instruction}
 {"- 최종 장면 종료 시간은 다음 중 하나로 작성: " + ", ".join(str(value) for value in request.supported_video_durations) if request.supported_video_durations else ""}
 {"- USP가 비어있거나 null인 경우, 상품 데이터의 다른 정보만을 바탕으로 USP를 도출해 product.usp에 출력하고 스크립트에 반영하세요." if not has_usp else "- USP가 입력되어 있으면 입력받은 USP값을 그대로 출력하고 product.usp에 저장한 뒤 스크립트에 반영하세요."}
@@ -346,10 +452,12 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 }}
 
 타깃: {request.target_audience}
-상품 데이터:
-{product_json}
-추가 리뷰 데이터:
-{reviews_json}
+요구사항:
+- CTA Action: {cta_action}
+- Video duration: {request.max_duration_seconds}
+- Upload Channel: {request.channel}
+상품 핵심 정보:
+{product_prompt_fields}
 """
 
 
@@ -486,6 +594,10 @@ def validate_script_document(
         if not isinstance(scene.get("visual"), str) or not scene["visual"].strip():
             raise ScriptValidationError(
                 f"{index}번째 scene의 visual이 필요합니다."
+            )
+        if len(scene["visual"]) >= 100:
+            raise ScriptValidationError(
+                f"{index}번째 scene의 visual은 100자 미만이어야 합니다."
             )
         if not isinstance(scene.get("intent"), str) or not scene["intent"].strip():
             raise ScriptValidationError(f"{index}번째 scene의 intent가 필요합니다.")

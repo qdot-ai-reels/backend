@@ -12,6 +12,7 @@ from app.script_generator import (
     ScriptGenerationRequest,
     select_supported_video_duration,
     ScriptValidationError,
+    SCRIPT_RESPONSE_SCHEMA,
     build_script_prompt,
     build_script_message_content,
     extract_script_json,
@@ -314,7 +315,8 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("scenes", body["response_format"]["json_schema"]["schema"]["required"])
         self.assertIn("product", body["response_format"]["json_schema"]["schema"]["required"])
         self.assertNotIn("summary", body["response_format"]["json_schema"]["schema"]["required"])
-        self.assertIn("프랭클린", body["messages"][0]["content"])
+        self.assertIn("Selling Point", body["messages"][0]["content"])
+        self.assertIn("EWG 그린등급", body["messages"][0]["content"])
         self.assertIn("4.5음절", body["messages"][0]["content"])
 
     def test_prompt_uses_structured_output_without_video_settings_in_meta(self):
@@ -422,6 +424,32 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("거품이 잘 납니다.", prompt)
         self.assertIn("30초 이내 광고로 작성", prompt)
 
+    def test_includes_notion_product_fields_as_labeled_prompt_context(self):
+        prompt = build_script_prompt(
+            ScriptGenerationRequest(
+                product={
+                    **PRODUCT,
+                    "selling_point": "식물 유래 성분",
+                    "usp": "비건 인증",
+                    "curator_pitch": "신뢰감 있는 제품",
+                    "hashtags": ["아기세제"],
+                    "description_text": "상품 설명",
+                    "detail_info": "상세 정보",
+                    "reviews": ["리뷰 내용"],
+                },
+                custom_prompt="광고 목적: 판매\nCTA: 링크 확인",
+            )
+        )
+
+        self.assertIn("- Selling Point: 식물 유래 성분", prompt)
+        self.assertIn("- USP(Unique Selling Point): 비건 인증", prompt)
+        self.assertIn("- Curator Pitch: 신뢰감 있는 제품", prompt)
+        self.assertIn("- Hashtags: [\"아기세제\"]", prompt)
+        self.assertIn("- Description Text: 상품 설명", prompt)
+        self.assertIn("- Detail Info: 상세 정보", prompt)
+        self.assertIn("- Reviews: [\"리뷰 내용\"]", prompt)
+        self.assertIn("- CTA Action: 링크 확인", prompt)
+
     def test_includes_prompt_filling_rule_and_ad_methodologies(self):
         prompt = build_script_prompt(
             ScriptGenerationRequest(product=PRODUCT, custom_prompt="리필 여부를 확인해 반영")
@@ -443,6 +471,36 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("상품 라벨의 글자와 로고는 식별 가능한 정면 클로즈업으로 보여주지 않는다", prompt)
         self.assertIn("자막, 가격, 할인율, CTA 문구는 영상에 삽입하지 않는다", prompt)
         self.assertIn("visual은 100자 미만", prompt)
+
+    def test_includes_all_260830_1_content_rules(self):
+        prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
+
+        expected_rules = (
+            "첫 1~3초 안에",
+            "어떤 상황에서 왜 좋은지",
+            "소비자가 판단할 수 있는 정보",
+            "지나치게 과장하지 말아야",
+            "허위 경험",
+            "slight handheld motion",
+            "imperfect skin texture",
+            "subtle blemishes",
+            "wrinkled fabric",
+            "natural and subtle asymmetry",
+        )
+        for rule in expected_rules:
+            self.assertIn(rule, prompt)
+
+    def test_enforces_documented_visual_length_in_response_schema(self):
+        visual_schema = SCRIPT_RESPONSE_SCHEMA["properties"]["scenes"]["items"]["properties"]["visual"]
+
+        self.assertEqual(visual_schema["maxLength"], 99)
+
+    def test_rejects_visual_that_reaches_100_characters(self):
+        document = json.loads(json.dumps(VALID_DOCUMENT))
+        document["scenes"][0]["visual"] = "가" * 100
+
+        with self.assertRaisesRegex(ScriptValidationError, "visual"):
+            validate_script_document(document)
 
     def test_adds_product_image_to_multimodal_message(self):
         request = ScriptGenerationRequest(
