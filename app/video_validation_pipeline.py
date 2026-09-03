@@ -16,7 +16,7 @@ from app.video_generator import (
     VideoGenerationResult,
     VideoGenerationTimeoutError,
 )
-from app.video_metadata import read_video_metadata
+from app.video_metadata import pad_video_to_vertical_canvas, read_video_metadata
 from app.video_validator import ValidationPolicy, ValidationResult, validate_video
 
 
@@ -51,8 +51,10 @@ class PublishedVideoArtifact:
 VideoGenerator = Callable[[VideoGenerationRequest, int], VideoGenerationResult]
 VideoDownloader = Callable[[str, str], None]
 MetadataReader = Callable[[str | Path], Any]
+VideoNormalizer = Callable[[str | Path, str | Path, Any], None]
 VideoPublisher = Callable[[str | Path, VideoGenerationResult], PublishedVideoArtifact]
 logger = logging.getLogger(__name__)
+VERTICAL_PADDING_ASPECT_TOLERANCE = 0.05
 
 
 class VideoValidationPipeline:
@@ -61,6 +63,7 @@ class VideoValidationPipeline:
         generate_video: VideoGenerator,
         download_video: VideoDownloader | None = None,
         read_metadata: MetadataReader = read_video_metadata,
+        normalize_video: VideoNormalizer = pad_video_to_vertical_canvas,
         publish_video: VideoPublisher | None = None,
         max_retries: int = 1,
     ) -> None:
@@ -69,6 +72,7 @@ class VideoValidationPipeline:
         self.generate_video = generate_video
         self.download_video = download_video or self._download_video
         self.read_metadata = read_metadata
+        self.normalize_video = normalize_video
         self.publish_video = publish_video
         self.max_retries = max_retries
 
@@ -102,12 +106,28 @@ class VideoValidationPipeline:
                         f"{error}"
                     ) from error
 
+                source_metadata = metadata
+                normalized_path = self._normalize_if_needed(
+                    video_path,
+                    metadata,
+                    policy,
+                    directory,
+                )
+                if normalized_path != video_path:
+                    video_path = normalized_path
+                    metadata = self.read_metadata(video_path)
+
                 last_validation = validate_video(metadata, policy)
                 logger.info(
                     "video validation result: provider_job_id=%s attempt=%s "
-                    "metadata=%s checks=%s errors=%s",
+                    "source_metadata=%s validated_metadata=%s checks=%s errors=%s",
                     generated.job_id,
                     attempt,
+                    {
+                        "width": getattr(source_metadata, "width", None),
+                        "height": getattr(source_metadata, "height", None),
+                        "duration_seconds": getattr(source_metadata, "duration_seconds", None),
+                    },
                     {
                         "width": getattr(metadata, "width", None),
                         "height": getattr(metadata, "height", None),
@@ -158,6 +178,41 @@ class VideoValidationPipeline:
             validation=last_validation,
             total_cost=total_cost,
         )
+
+    def _normalize_if_needed(
+        self,
+        video_path: str,
+        metadata: Any,
+        policy: ValidationPolicy,
+        directory: str,
+    ) -> str:
+        expected_aspect = policy.expected_aspect_width / policy.expected_aspect_height
+        actual_aspect = metadata.width / metadata.height
+        target_height = round(metadata.width / expected_aspect)
+        if target_height % 2:
+            target_height += 1
+
+        should_pad = (
+            metadata.height < target_height
+            and 0 < actual_aspect - expected_aspect <= VERTICAL_PADDING_ASPECT_TOLERANCE
+        )
+        if not should_pad:
+            return video_path
+
+        normalized_path = str(Path(directory) / "normalized.mp4")
+        logger.info(
+            "normalizing short vertical video: source=%s target=%sx%s",
+            {"width": metadata.width, "height": metadata.height},
+            metadata.width,
+            target_height,
+        )
+        try:
+            self.normalize_video(video_path, normalized_path, metadata)
+        except Exception as error:
+            raise VideoValidationPipelineError(
+                f"세로형 영상 여백 보정에 실패했습니다: {error}"
+            ) from error
+        return normalized_path
 
     @staticmethod
     def _script_duration(script: Mapping[str, Any]) -> float:
