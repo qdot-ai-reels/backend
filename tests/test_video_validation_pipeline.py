@@ -67,7 +67,41 @@ class VideoValidationPipelineTests(unittest.TestCase):
             "height": 854,
             "duration_seconds": 7.0,
         })
-        self.assertIn("duration", log_message[5])
+        self.assertIn("duration", log_message[6])
+
+    def test_pads_short_vertical_video_before_publishing(self):
+        normalized = []
+
+        def read_metadata(path):
+            if str(path).endswith("normalized.mp4"):
+                return VideoMetadata(480, 854, 8.0)
+            return VideoMetadata(480, 832, 8.0)
+
+        def normalize_video(source, destination, metadata):
+            normalized.append((source, destination, metadata))
+            Path(destination).write_bytes(b"normalized video")
+
+        pipeline = VideoValidationPipeline(
+            generate_video=lambda _request, _attempt: VideoGenerationResult(
+                job_id="job-1",
+                status="completed",
+                video_url="https://example.com/video.mp4",
+            ),
+            download_video=lambda _url, destination: Path(destination).write_bytes(b"video"),
+            read_metadata=read_metadata,
+            normalize_video=normalize_video,
+            publish_video=lambda path, _generated: PublishedVideoArtifact(
+                storage_path=str(path),
+                playback_url="/video/file",
+                download_url="/video/file?download=true",
+            ),
+        )
+
+        result = pipeline.run(VideoGenerationRequest(SCRIPT, "https://example.com/product.jpg"))
+
+        self.assertEqual(result.status, PipelineStatus.COMPLETED)
+        self.assertEqual(len(normalized), 1)
+        self.assertTrue(result.storage_path.endswith("normalized.mp4"))
 
     def test_does_not_submit_duplicate_provider_jobs_after_timeout(self):
         attempts = []
