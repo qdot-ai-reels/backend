@@ -32,6 +32,36 @@ DEFAULT_SUPPORTED_DURATIONS = tuple(range(4, 16))
 logger = logging.getLogger(__name__)
 
 
+# Keep this block identical to the Colab video-generation condition prompt.
+VIDEO_CONDITION_PROMPT = """
+### Condition
+1. Video Rules
+- No dialogue or direct-to-camera speech.
+- Keep the same person's appearance and clothing consistent across shots.
+- Preserve the provided product's shape, color, package structure, and label placement.
+
+2. reference (person) image
+- Use the provided person image as the character reference. The person in the image was generated using AI.
+- Front-facing appearance is not required.
+
+3. Anti-Slop Prompt For Video
+Camera
+- slight handheld motion
+
+People
+- imperfect skin texture
+- subtle blemishes
+- subtle clothing wrinkles
+- natural and subtle asymmetry
+
+4. Text & Label Policy
+- No added subtitles, captions, price, discount, or CTA text.
+- Do not intentionally show product text in a readable close-up.
+- Preserve the original product label and graphics.
+- Do not generate or modify package text or logos.
+"""
+
+
 class VideoGenerationError(RuntimeError):
     """Raised when a video generation job cannot be completed."""
 
@@ -80,36 +110,9 @@ def build_video_prompt(
     script: Mapping[str, Any],
     has_influencer_image: bool = False,
 ) -> str:
-    """Convert a validated script document into a video-generation prompt."""
-    reference_instruction = (
-        "Use Image 1 as the AI influencer reference and Image 2 as the main product reference. "
-        "Use the provided person image as the character reference. The person in the image "
-        "was generated using AI. Front-facing appearance is not required. "
-        "Use any following images as additional product detail references. "
-        "The AI influencer must be clearly visible on screen and actively promote the "
-        "product in the generated video; do not replace the influencer with only a hand, "
-        "finger, or an off-screen action. Preserve the influencer's identity and the "
-        "product's shape, label, colors, and text. "
-        if has_influencer_image
-        else "Use the provided product image as the visual reference and preserve the product shape, label, colors, and text. "
-    )
-    return (
-        "Create a vertical product advertisement video. "
-        + reference_instruction
-        + "Use a 9:16 aspect ratio, clean lighting, and simple transitions. "
-        "Do not use dialogue or direct-to-camera speech. "
-        "Keep the same person's appearance and clothing consistent across shots. "
-        "Use slight handheld motion, imperfect skin texture, subtle blemishes, subtle "
-        "clothing wrinkles, and natural and subtle asymmetry where people appear. "
-        "Do not add subtitles, captions, prices, discounts, CTA text, or dialogue. "
-        "Do not intentionally show product text in a readable close-up. "
-        "Preserve the original product label and graphics. "
-        "Do not generate or modify package text or logos. "
-        "Text animation will be added separately after video generation. "
-        "Do not add unsupported product claims, extra products, new logos, "
-        "or distorted text. Follow these script scenes:\n"
-        + convert_dict_to_formatted_text(script)
-    )
+    """Convert a validated script document using the Colab prompt verbatim."""
+    del has_influencer_image
+    return convert_dict_to_formatted_text(script) + "\n\n" + VIDEO_CONDITION_PROMPT
 
 
 def convert_dict_to_formatted_text(data: Mapping[str, Any] | str) -> str:
@@ -245,7 +248,7 @@ class OpenRouterVideoClient:
                 self._image_reference(request.image_url),
                 *(
                     self._image_reference(image_url)
-                    for image_url in valid_detail_image_urls
+                    for image_url in valid_detail_image_urls[:1]
                 ),
             ]
         else:
