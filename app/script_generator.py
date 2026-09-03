@@ -405,6 +405,8 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 
 #### 6. 기타
 (1) 영상 스크립트 내의 음성 대사는 1초에 4.5음절이 넘지 않도록 한다.
+각 장면의 대사 음절 수가 해당 장면 시간 × 4.5를 넘지 않도록 작성하세요.
+대사는 장면 시간 안에 읽을 수 있도록 짧게 작성하세요.
 
 ### Methodology
 
