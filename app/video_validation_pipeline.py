@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 from dataclasses import dataclass
@@ -51,6 +52,7 @@ VideoGenerator = Callable[[VideoGenerationRequest, int], VideoGenerationResult]
 VideoDownloader = Callable[[str, str], None]
 MetadataReader = Callable[[str | Path], Any]
 VideoPublisher = Callable[[str | Path, VideoGenerationResult], PublishedVideoArtifact]
+logger = logging.getLogger(__name__)
 
 
 class VideoValidationPipeline:
@@ -101,6 +103,19 @@ class VideoValidationPipeline:
                     ) from error
 
                 last_validation = validate_video(metadata, policy)
+                logger.info(
+                    "video validation result: provider_job_id=%s attempt=%s "
+                    "metadata=%s checks=%s errors=%s",
+                    generated.job_id,
+                    attempt,
+                    {
+                        "width": getattr(metadata, "width", None),
+                        "height": getattr(metadata, "height", None),
+                        "duration_seconds": getattr(metadata, "duration_seconds", None),
+                    },
+                    last_validation.checks,
+                    last_validation.errors,
+                )
                 if last_validation.is_valid:
                     published: PublishedVideoArtifact | None = None
                     if self.publish_video is not None:
