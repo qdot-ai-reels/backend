@@ -17,6 +17,7 @@ class ValidationPolicy:
     max_width: int = 1080
     max_height: int = 1920
     duration_tolerance_seconds: float = 0.1
+    aspect_ratio_tolerance: float = 0.01
 
 
 @dataclass
@@ -30,9 +31,11 @@ def validate_video(
     metadata: VideoMetadata,
     policy: ValidationPolicy,
 ) -> ValidationResult:
+    expected_aspect_ratio = policy.expected_aspect_width / policy.expected_aspect_height
+    actual_aspect_ratio = metadata.width / metadata.height
     aspect_ratio_passed = (
-        metadata.width * policy.expected_aspect_height
-        == metadata.height * policy.expected_aspect_width
+        abs(actual_aspect_ratio - expected_aspect_ratio)
+        <= policy.aspect_ratio_tolerance
     )
     resolution_passed = (
         metadata.width <= policy.max_width

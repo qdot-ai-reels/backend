@@ -167,6 +167,28 @@ class VideoValidationPipelineTests(unittest.TestCase):
         self.assertEqual(attempts, [1])
         self.assertIn("aspect_ratio", result.validation.errors)
 
+    def test_accepts_480p_vertical_dimensions_with_rounding(self):
+        pipeline = VideoValidationPipeline(
+            generate_video=lambda _request, _attempt: VideoGenerationResult(
+                job_id="job-1",
+                status="completed",
+                video_url="https://example.com/video.mp4",
+                cost=0.24,
+            ),
+            download_video=lambda _url, destination: Path(destination).write_bytes(b"video"),
+            read_metadata=lambda _path: VideoMetadata(480, 854, 8.0),
+            publish_video=lambda video_path, _generated: PublishedVideoArtifact(
+                storage_path=video_path,
+                playback_url="/video/file",
+                download_url="/video/file?download=true",
+            ),
+        )
+
+        result = pipeline.run(VideoGenerationRequest(SCRIPT, "https://example.com/product.jpg"))
+
+        self.assertEqual(result.status, PipelineStatus.COMPLETED)
+        self.assertNotIn("aspect_ratio", result.validation.errors)
+
     def test_fails_completed_flow_when_local_publish_fails(self):
         pipeline = VideoValidationPipeline(
             generate_video=lambda _request, _attempt: VideoGenerationResult(
