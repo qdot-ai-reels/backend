@@ -181,8 +181,8 @@ def select_video_resolution(
     service: SettingsService | None,
     capabilities: Any,
 ) -> str:
-    minimum = service.get_runtime_settings().video_min_resolution if service else "720p"
-    maximum = service.get_runtime_settings().video_max_resolution if service else "1080p"
+    minimum = service.get_runtime_settings().video_min_resolution if service else "480p"
+    maximum = service.get_runtime_settings().video_max_resolution if service else "480p"
 
     def pixels(value: str) -> int:
         numeric = value.rstrip("p")

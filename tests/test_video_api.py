@@ -12,12 +12,25 @@ from app.api.v1.video import (
     get_video_file,
     get_video_access_url,
     publish_validated_video,
+    select_video_resolution,
 )
 from app.settings_service import VideoModelCapabilities
 from app.video_validation_pipeline import PipelineResult, PipelineStatus
 
 
 class VideoApiTests(unittest.TestCase):
+    def test_uses_480p_when_runtime_settings_are_unavailable(self):
+        capabilities = VideoModelCapabilities(
+            model_id="video-model",
+            name="Video Model",
+            supported_durations=(4, 6, 8, 15),
+            supported_aspect_ratios=("9:16",),
+            supported_resolutions=("480p", "720p", "1080p"),
+            generate_audio=False,
+        )
+
+        self.assertEqual(select_video_resolution(None, capabilities), "480p")
+
     def test_only_accepts_vertical_nine_by_sixteen_requests(self):
         with self.assertRaises(ValidationError):
             VideoGenerationBody(
@@ -36,7 +49,7 @@ class VideoApiTests(unittest.TestCase):
             name="Video Model",
             supported_durations=(4, 6, 8),
             supported_aspect_ratios=("9:16",),
-            supported_resolutions=("720p",),
+            supported_resolutions=("480p", "720p"),
             generate_audio=False,
         )
         pipeline_class.return_value.run.return_value = PipelineResult(
