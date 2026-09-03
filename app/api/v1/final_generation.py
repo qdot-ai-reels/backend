@@ -171,6 +171,18 @@ def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
             job_id=job_id,
         )
         if not video_result.storage_path:
+            logger.error(
+                "validated video has no local storage path: job_id=%s "
+                "provider_job_id=%s attempts=%s status=%s checks=%s errors=%s "
+                "total_cost=%s",
+                job_id,
+                video_result.job_id,
+                video_result.attempts,
+                video_result.status,
+                video_result.validation.checks,
+                video_result.validation.errors,
+                video_result.total_cost,
+            )
             raise RuntimeError("검증된 영상의 로컬 저장 경로를 확인할 수 없습니다.")
         update_job(job_id, video_job_id=video_result.job_id, cost=video_result.total_cost)
 

@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.video_generator import (
     VideoGenerationRequest,
@@ -42,6 +43,32 @@ SCRIPT = {
 
 
 class VideoValidationPipelineTests(unittest.TestCase):
+    def test_logs_metadata_and_validation_errors(self):
+        pipeline = VideoValidationPipeline(
+            generate_video=lambda _request, _attempt: VideoGenerationResult(
+                job_id="job-1",
+                status="completed",
+                video_url="https://example.com/video.mp4",
+            ),
+            download_video=lambda _url, destination: Path(destination).write_bytes(b"video"),
+            read_metadata=lambda _path: VideoMetadata(480, 854, 7.0),
+            max_retries=0,
+        )
+
+        with patch("app.video_validation_pipeline.logger") as logger:
+            result = pipeline.run(VideoGenerationRequest(SCRIPT, "https://example.com/product.jpg"))
+
+        self.assertEqual(result.status, PipelineStatus.RETRY_EXHAUSTED)
+        logger.info.assert_called_once()
+        log_message = logger.info.call_args.args
+        self.assertIn("video validation result", log_message[0])
+        self.assertEqual(log_message[3], {
+            "width": 480,
+            "height": 854,
+            "duration_seconds": 7.0,
+        })
+        self.assertIn("duration", log_message[5])
+
     def test_does_not_submit_duplicate_provider_jobs_after_timeout(self):
         attempts = []
 
