@@ -124,6 +124,7 @@ def validate_image_inputs(
     detail_image_urls: Sequence[str] = (),
     dimensions_reader=read_image_dimensions,
     format_reader=read_image_format,
+    detail_minimum_dimension: int = 240,
 ) -> tuple[str, ...]:
     """Validate required images and return only usable detail image URLs.
 
@@ -150,6 +151,7 @@ def validate_image_inputs(
         try:
             validate_image_dimensions(
                 detail_image_url,
+                minimum_dimension=detail_minimum_dimension,
                 dimensions_reader=dimensions_reader,
             )
             if format_reader is not None:

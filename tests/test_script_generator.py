@@ -395,14 +395,14 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("EWG 그린등급", body["messages"][0]["content"])
         self.assertIn("4.5음절", body["messages"][0]["content"])
 
-    def test_prompt_uses_structured_output_without_video_settings_in_meta(self):
+    def test_prompt_matches_colab_and_keeps_schema_out_of_prompt(self):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
 
-        self.assertIn('"output_format_version"', prompt)
-        self.assertIn('"time_range_sec": {"start": 0, "end": 3}', prompt)
-        self.assertIn('"auditory"', prompt)
-        self.assertNotIn('"aspect_ratio": "9:16"', prompt)
-        self.assertNotIn('"max_duration_sec": 30', prompt)
+        self.assertIn("### Condition", prompt)
+        self.assertIn("### Methodology", prompt)
+        self.assertIn("### 상품 정보", prompt)
+        self.assertNotIn("다음 JSON 객체만 반환하세요", prompt)
+        self.assertNotIn('"output_format_version"', prompt)
 
     def test_asks_model_to_derive_missing_usp_without_mutating_product(self):
         response_payload = {
@@ -427,8 +427,8 @@ class ScriptGeneratorTests(unittest.TestCase):
         client.generate_script(ScriptGenerationRequest(product=product))
 
         prompt = json.loads(captured["request"].data)["messages"][0]["content"]
-        self.assertIn("USP가 비어있거나 null인 경우", prompt)
-        self.assertIn("상품 데이터의 다른 정보만을 바탕으로", prompt)
+        self.assertIn("USP(Unique Selling Point)값이 null이면", prompt)
+        self.assertIn("상품정보 항목의 내용에 근거하여", prompt)
         self.assertIsNone(product["usp"])
 
     def test_does_not_ask_to_derive_usp_when_product_has_usp(self):
@@ -436,8 +436,8 @@ class ScriptGeneratorTests(unittest.TestCase):
 
         prompt = build_script_prompt(request)
 
-        self.assertNotIn("USP가 비어있거나 null인 경우", prompt)
-        self.assertIn("입력받은 USP값을 그대로 출력", prompt)
+        self.assertIn("USP(Unique Selling Point)값이 null이면", prompt)
+        self.assertIn("입력한 그대로 출력할 것", prompt)
         self.assertIn("안심 세척", prompt)
 
     def test_asks_to_derive_usp_when_product_usp_is_only_whitespace(self):
@@ -445,7 +445,7 @@ class ScriptGeneratorTests(unittest.TestCase):
 
         prompt = build_script_prompt(request)
 
-        self.assertIn("USP가 비어있거나 null인 경우", prompt)
+        self.assertIn("USP(Unique Selling Point)값이 null이면", prompt)
 
     def test_accepts_null_voiceover_but_requires_script_output_fields(self):
         document = json.loads(json.dumps(VALID_DOCUMENT))
@@ -498,7 +498,7 @@ class ScriptGeneratorTests(unittest.TestCase):
         prompt = build_script_prompt(request)
 
         self.assertIn("거품이 잘 납니다.", prompt)
-        self.assertIn("30초 이내 광고로 작성", prompt)
+        self.assertNotIn("30초 이내 광고로 작성", prompt)
 
     def test_includes_notion_product_fields_as_labeled_prompt_context(self):
         prompt = build_script_prompt(
@@ -520,10 +520,10 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("- Selling Point: 식물 유래 성분", prompt)
         self.assertIn("- USP(Unique Selling Point): 비건 인증", prompt)
         self.assertIn("- Curator Pitch: 신뢰감 있는 제품", prompt)
-        self.assertIn("- Hashtags: [\"아기세제\"]", prompt)
+        self.assertIn("- Hashtags: ['아기세제']", prompt)
         self.assertIn("- Description Text: 상품 설명", prompt)
         self.assertIn("- Detail Info: 상세 정보", prompt)
-        self.assertIn("- Reviews: [\"리뷰 내용\"]", prompt)
+        self.assertIn("- Reviews: ['리뷰 내용']", prompt)
         self.assertIn("- CTA Action: 링크 확인", prompt)
 
     def test_includes_prompt_filling_rule_and_ad_methodologies(self):
@@ -541,12 +541,14 @@ class ScriptGeneratorTests(unittest.TestCase):
 
         self.assertIn("dolly", prompt)
         self.assertIn("Reduce fill", prompt)
-        self.assertIn("Anti-Slop Prompt For Video를 선택하는 경우", prompt)
+        self.assertIn(
+            "Anti-Slop Prompt For Video: 현실성 있는 영상을 위해 불완전성(imperfection)을 더하라",
+            prompt,
+        )
         self.assertIn("카메라를 주시하며 말하지 않는다", prompt)
         self.assertIn("같은 인물의 얼굴, 헤어스타일, 의상이 장면마다 유지", prompt)
         self.assertIn("상품 라벨의 글자와 로고는 식별 가능한 정면 클로즈업으로 보여주지 않는다", prompt)
         self.assertIn("자막, 가격, 할인율, CTA 문구는 영상에 삽입하지 않는다", prompt)
-        self.assertIn("visual은 100자 미만", prompt)
 
     def test_includes_all_260830_1_content_rules(self):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
@@ -668,11 +670,11 @@ class ScriptGeneratorTests(unittest.TestCase):
 
         first_prompt = json.loads(opener.requests[0].data)["messages"][0]["content"]
         second_prompt = json.loads(opener.requests[1].data)["messages"][0]["content"]
-        self.assertIn('"scenes"', first_prompt)
-        self.assertIn('"scenes"', second_prompt)
-        self.assertIn("이전 스크립트 생성 결과가 검증에 실패했습니다", second_prompt)
-        self.assertIn("1번째 scene의 대사가 너무 깁니다", second_prompt)
-        self.assertIn("전체 스크립트를 다시 생성", second_prompt)
+        self.assertNotIn("다음 JSON 객체만 반환하세요", first_prompt)
+        self.assertNotIn('"scenes"', first_prompt)
+        self.assertNotIn("다음 JSON 객체만 반환하세요", second_prompt)
+        self.assertNotIn('"scenes"', second_prompt)
+        self.assertEqual(first_prompt, second_prompt)
 
     def test_honors_configured_attempts_even_after_fallback_model_is_used(self):
         invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
@@ -719,7 +721,7 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertEqual(result, VALID_DOCUMENT)
         self.assertEqual(len(opener.requests), 5)
 
-    def test_retry_prompt_contains_validation_reason_and_requests_a_complete_script(self):
+    def test_retry_prompt_remains_identical_to_the_initial_prompt(self):
         invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
         invalid_document["scenes"][0]["time_range_sec"] = {"start": 0, "end": 1}
         invalid_document["scenes"][0]["auditory"]["voiceover"] = (
@@ -738,9 +740,9 @@ class ScriptGeneratorTests(unittest.TestCase):
 
         client.generate_script(ScriptGenerationRequest(product=PRODUCT))
 
+        first_prompt = json.loads(opener.requests[0].data)["messages"][0]["content"]
         retry_prompt = json.loads(opener.requests[1].data)["messages"][0]["content"]
-        self.assertIn("1번째 scene의 대사가 너무 깁니다", retry_prompt)
-        self.assertIn("전체 스크립트를 다시 생성", retry_prompt)
+        self.assertEqual(first_prompt, retry_prompt)
 
 
 if __name__ == "__main__":

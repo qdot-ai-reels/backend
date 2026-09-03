@@ -163,8 +163,9 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertIn("상품을 화면 중앙에 보여준다.", prompt)
         self.assertNotIn("자막=상품 소개", prompt)
         self.assertNotIn("내레이션=상품을 소개합니다.", prompt)
-        self.assertIn("Do not add subtitles, captions, prices, discounts, CTA text, or dialogue.", prompt)
-        self.assertIn("9:16", prompt)
+        self.assertIn("- No added subtitles, captions, price, discount, or CTA text.", prompt)
+        self.assertIn("- Preserve the provided product's shape, color, package structure, and label placement.", prompt)
+        self.assertTrue(prompt.index("| Section | Time Range | Visual |") < prompt.index("### Condition"))
 
     def test_includes_full_script_context_in_video_prompt(self):
         prompt = build_video_prompt(CURRENT_SCRIPT)
@@ -304,10 +305,7 @@ class VideoGeneratorTests(unittest.TestCase):
             [item["image_url"]["url"] for item in request_body["input_references"]],
             ["https://example.com/influencer.jpg", "https://example.com/product.jpg"],
         )
-        self.assertIn("Image 1", request_body["prompt"])
-        self.assertIn("Image 2", request_body["prompt"])
-        self.assertIn("Image 1 as the AI influencer reference", request_body["prompt"])
-        self.assertIn("Image 2 as the main product reference", request_body["prompt"])
+        self.assertIn("Use the provided person image as the character reference", request_body["prompt"])
 
     def test_video_prompt_includes_documented_person_and_label_rules(self):
         prompt = build_video_prompt(SCRIPT, has_influencer_image=True)
@@ -317,7 +315,7 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertIn("slight handheld motion", prompt)
         self.assertIn("Do not intentionally show product text in a readable close-up", prompt)
 
-    def test_submits_all_product_detail_images_after_influencer_and_main_image(self):
+    def test_submits_first_valid_product_detail_image_after_influencer_and_main_image(self):
         opener = SequentialOpener([
             {"id": "job-1", "polling_url": "https://example.com/poll/job-1"},
             {"id": "job-1", "status": "completed", "unsigned_urls": ["https://example.com/video.mp4"]},
@@ -337,6 +335,7 @@ class VideoGeneratorTests(unittest.TestCase):
                 detail_image_urls=(
                     "https://example.com/detail-1.jpg",
                     "https://example.com/detail-2.jpg",
+                    "https://example.com/detail-3.jpg",
                 ),
             )
         )
@@ -348,7 +347,6 @@ class VideoGeneratorTests(unittest.TestCase):
                 "https://example.com/influencer.jpg",
                 "https://example.com/product.jpg",
                 "https://example.com/detail-1.jpg",
-                "https://example.com/detail-2.jpg",
             ],
         )
 

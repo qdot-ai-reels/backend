@@ -318,30 +318,35 @@ def prepare_product_for_prompt(product: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _format_product_prompt_value(value: Any) -> str:
-    """Render labeled product fields without losing structured values."""
-    if value is None:
-        return "null"
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False)
+    """Match the Colab prompt's direct Python f-string conversion."""
     return str(value)
 
 
 def build_product_prompt_fields(
     product: Mapping[str, Any], reviews: list[Any] | None
 ) -> str:
-    """Render the explicit product fields required by the team prompt."""
-    field_values = {
-        "Selling Point": product.get("selling_point", product.get("selling_points")),
-        "USP(Unique Selling Point)": product.get("usp"),
-        "Curator Pitch": product.get("curator_pitch"),
-        "Hashtags": product.get("hashtags"),
-        "Description Text": product.get("description_text"),
-        "Detail Info": product.get("detail_info"),
-        "Reviews": product.get("reviews", reviews or []),
-    }
+    """Render the product section in the same order and shape as the Colab prompt."""
+    selling_point = product.get("selling_point", product.get("selling_points"))
+    usp = product.get("usp")
+    curator_pitch = product.get("curator_pitch")
+    hashtags = product.get("hashtags")
+    description_text = product.get("description_text")
+    detail_info = product.get("detail_info")
+    product_reviews = product.get("reviews", reviews or [])
     return "\n".join(
-        f"- {label}: {_format_product_prompt_value(value)}"
-        for label, value in field_values.items()
+        [
+            f"- Selling Point: {_format_product_prompt_value(selling_point)}",
+            f"- USP(Unique Selling Point): {_format_product_prompt_value(usp)}",
+            "\t- USP(Unique Selling Point)값이 null이면",
+            "\t\t- 상품정보 항목의 내용에 근거하여 USP(Unique Selling Point)를 추론하여 작성하여 출력할 것",
+            "\t- USP(Unique Selling Point)값이 null이 아니면",
+            "\t\t- 입력한 그대로 출력할 것",
+            f"- Curator Pitch: {_format_product_prompt_value(curator_pitch)}",
+            f"- Hashtags: {_format_product_prompt_value(hashtags)}",
+            f"- Description Text: {_format_product_prompt_value(description_text)}",
+            f"- Detail Info: {_format_product_prompt_value(detail_info)}",
+            f"- Reviews: {_format_product_prompt_value(product_reviews)}",
+        ]
     )
 
 
@@ -356,117 +361,80 @@ def extract_cta_action(custom_prompt: str) -> str:
 
 def build_script_prompt(request: ScriptGenerationRequest) -> str:
     """Build a constrained prompt from product data supplied by the caller."""
-    usp = request.product.get("usp")
-    has_usp = usp is not None and (not isinstance(usp, str) or bool(usp.strip()))
-    # Legacy full JSON context is intentionally disabled to follow the Notion
-    # prompt's explicitly listed product fields. Keep the code here as a
-    # reference in case the team later decides to restore the fallback.
-    # product_json = json.dumps(
-    #     prepare_product_for_prompt(request.product),
-    #     ensure_ascii=False,
-    #     indent=2,
-    # )
-    # reviews_json = json.dumps(request.reviews or [], ensure_ascii=False, indent=2)
     product_prompt_fields = build_product_prompt_fields(request.product, request.reviews)
     custom_prompt = request.custom_prompt.strip() if request.custom_prompt else ""
     cta_action = extract_cta_action(custom_prompt)
-    custom_instruction = (
-        "- 아래 추가 프롬프트의 지시도 반영하세요.\n"
-        f"추가 프롬프트: {custom_prompt}"
-        if custom_prompt
-        else ""
-    )
-    return f"""당신은 공동구매 광고 숏폼 스크립트 작성자입니다.
+    return f"""
+당신은 공동구매 광고 숏폼 스크립트 작성자입니다.
 
-아래 상품 데이터에 실제로 포함된 정보만 사용해 {request.channel}용 스크립트를 작성하세요.
-확인되지 않은 효능, 인증, 소재, 가격, 할인, 사용 후기 또는 제품 특징을 추측해서 추가하지 마세요.
-과대광고성 문구(효능 과장, 근거 없는 내용 등)를 포함하지 마세요.
-지나치게 과장하지 말아야 하며, 실제 사용자의 사용담처럼 허위 경험이 들어가면 안 됩니다.
-상품 데이터에 없는 정보는 빈 문자열 또는 빈 배열로 두세요.
+아래 상품 데이터에 실제로 포함된 정보만 사용해 스크립트를 작성하세요.
 
-필수 조건:
-- 세로형 9:16 영상
-- 최대 {request.max_duration_seconds}초
-- 선택한 광고 방법론을 적용하고 마지막 장면에 CTA를 포함
-- 사용할 수 있는 광고 방법론: Hook-Body-CTA, PAS, AIDA, BAB(Before-After-Bridge), 4Ps(Promise-Picture-Proof-Push)
-- Anti-Slop Prompt For Video를 선택하는 경우 과도하게 인공적인 표현을 줄이고 아래 불완전성을 자연스럽게 반영하세요.
-- Product: signs of use(제품 사용 흔적)
-- Camera: slight handheld motion(약간의 핸드헬드 움직임)
-- People: imperfect skin texture(고르지 않은 피부결), subtle blemishes(미세한 잡티), wrinkled fabric(주름진 옷감), natural and subtle asymmetry(자연스럽고 미세한 비대칭)
-- 장면마다 하나의 핵심 행동
-- 영상 없이 자막만 읽어도 이해 가능
-- 숏폼의 첫 1~3초 안에 소비자의 문제나 관심사를 바로 제시하세요.
-- 상품이 어떤 상황에서 왜 좋은지 보여주세요.
-- 상품의 기능이나 사용 장면처럼 소비자가 판단할 수 있는 정보를 포함하세요.
-- 첫 장면은 시선을 끌고, 마지막 장면은 구체적인 CTA를 포함
-- 자막은 짧게 작성하고 화면에 넣을 문구와 내레이션을 구분
-- 대사는 장면 시간 안에 읽을 수 있도록 작성하고, 평균 1초당 4.5음절을 기준으로 계산
-- 각 장면의 대사 음절 수가 해당 장면 시간 x 4.5를 넘지 않도록 작성
-- 추상적인 표현 대신 dolly, pan, tilt, crane, push-in, rack focus, locked-off 같은 카메라 용어와 Reduce fill, Cool down, Desaturate, Diffuse, Dim down, Reposition 같은 조명 용어를 사용하세요.
+### Condition
+#### 1. 광고 진실성
+(1) 입력된 상품 정보 안에서만 사실을 작성한다.
+(2) 과대광고성 문구(효능 과장, 근거 없는 내용 등)를 포함하지 말아야 한다.
+(3) 지나치게 과장하지 말아야 한다.
+(4) 실제 사용자의 사용담 처럼 허위 경험이 들어가면 안된다.
+
+#### 2. 상품 정보
+(1) 비어있는 상품 정보들 중에, 유저가 프롬프트를 통해 해당 상품정보를 입력해주었다면, 이를 반영하여 비어 있는 상품 정보를 채워넣어라.
+(2) 입력된 상품 정보들 중에서 usp 값이 비어있으며 유저가 USP(Unique Selling Point)에 대한 정보를 제공하지 않았다면, 다른 상품정보 항목의 내용에 근거하여 USP(Unique Selling Point)를 추론하여 작성하라.
+
+#### 3. 핵심 원칙
+(1) 숏폼에서는 첫 1~3초 안에 계속 볼지 넘길지가 결정되기 때문에, 소비자의 문제나 관심사를 바로 건들여야 한다.
+(2) 이 상품이 어떤 상황에서 왜 좋은지를 보여주어야 한다.
+(3) 상품의 기능, 사용 장면처럼 소비자가 판단할 수 있는 정보가 들어가야 한다.
+
+#### 4. 영상 구현 구체성
+(1) 추상적 설명 대신 구체적 지시
+- 'Masterpiece', 'Hyper-realistic', 'Stunning', 'Cinematic'와 같은 추상적 표현 대신 카메라 용어, 조명 언어를 작성한다.
+  - 카메라 용어 예시: dolly, pan, tilt, crane, push-in, rack focus, locked-off
+  - 조명 용어 예시: Reduce fill, Cool down, Desaturate, Diffuse, Dim down, Reposition
+(2) 세부 규칙
 - 등장인물이 카메라를 주시하며 말하지 않는다.
 - 같은 인물의 얼굴, 헤어스타일, 의상이 장면마다 유지되도록 한다.
 - 상품 이미지의 형태, 색상, 라벨, 용기가 바뀌지 않도록 한다.
-- 영상 내에 포함해야 하는 유일한 텍스트는 상품에 표기된 텍스트이며, 상품 이외의 물체에는 텍스트를 넣지 마세요.
-- 각 장면의 visual은 100자 미만으로 작성하세요.
+- 영상 내에 포함해야 하는 유일한 텍스트는 '상품 내에 표기되어 있는 텍스트이며, 영상 내 상품 이외의 물체에 텍스트가 최대한 포함되지 않아야 한다
+
+#### 5.  영상 내 상품 텍스트 노출 최소화
 - 상품 라벨의 글자와 로고는 식별 가능한 정면 클로즈업으로 보여주지 않는다.
-- 상품 라벨은 화면 바깥으로 일부 잘리거나 손·소품·그림자에 의해 부분적으로 가려지게 하세요.
+- 상품의 형태, 색상, 용기 구조는 유지하되 라벨은 비가독 상태로 표현한다.
+- 상품 라벨은 화면 바깥으로 일부 잘리거나, 손·소품·그림자에 의해 부분적으로 가려져야 한다.
 - 자막, 가격, 할인율, CTA 문구는 영상에 삽입하지 않는다.
-- 유저가 프롬프트를 통해 해당 상품정보를 입력해주었다면, 상품 정보가 비어 있더라도 그 정보로 빈 상품 정보를 채워 반영하세요.
-{custom_instruction}
-{"- 최종 장면 종료 시간은 다음 중 하나로 작성: " + ", ".join(str(value) for value in request.supported_video_durations) if request.supported_video_durations else ""}
-{"- USP가 비어있거나 null인 경우, 상품 데이터의 다른 정보만을 바탕으로 USP를 도출해 product.usp에 출력하고 스크립트에 반영하세요." if not has_usp else "- USP가 입력되어 있으면 입력받은 USP값을 그대로 출력하고 product.usp에 저장한 뒤 스크립트에 반영하세요."}
 
-다음 JSON 객체만 반환하세요. Markdown 코드블록이나 설명은 붙이지 마세요.
-{{
-  "meta": {{
-    "output_format_version": "1.0",
-    "language": "ko"
-  }},
-  "product": {{
-    "usp": "상품 데이터로 확인되거나 도출한 USP"
-  }},
-  "customer": {{
-    "main_target": "주요 타깃",
-    "pain_point": "타깃의 고민"
-  }},
-  "ads": {{
-    "goal": "광고 목표",
-    "cta_action": "시청자가 할 행동",
-    "channel_platform": "업로드 채널",
-    "ad_planner": {{"persona": null}},
-    "speaker": {{"persona": null, "tone": null}},
-    "main_target": "주요 타깃"
-  }},
-  "video": {{
-    "video_duration": "{request.max_duration_seconds}",
-    "required_scenes_elements": null,
-    "forbidden_scenes_elements": null
-  }},
-  "scenes": [
-    {{
-      "section": "Hook",
-      "time_range_sec": {{"start": 0, "end": 3}},
-      "visual": "화면에 보일 장면과 행동",
-      "auditory": {{
-        "subtitle": "화면 자막",
-        "voiceover": "내레이션"
-      }},
-      "intent": "장면의 연출 의도",
-      "notes": "연출 의도"
-    }}
-  ],
-  "etc": {{
-    "additional_information": null,
-    "video_ads_methodology": "선택한 광고 방법론"
-  }}
-}}
+#### 6. 기타
+(1) 영상 스크립트 내의 음성 대사는 1초에 4.5음절이 넘지 않도록 한다.
 
-타깃: {request.target_audience}
-요구사항:
+### Methodology
+
+#### 필수 방법론
+- 영상 마지막 부분에 CTA(Call To Action)을 추가
+\t- 'scenes' 부분의 가장 마지막 Section에는 유저가 해당 광고를 보고 특정한 액션을 취할 수 있어야 한다.
+
+#### 선택 방법론
+- Hook-Body-CTA
+- PAS
+- AIDA
+- BAB(Before-After-Bridge)
+- 4Ps(Promise-Picture-Proof-Push)
+- Anti-Slop Prompt For Video: 현실성 있는 영상을 위해 불완전성(imperfection)을 더하라
+\t- Product
+\t\t- signs of use(제품 사용 흔적)
+\t- Camera
+\t\t- slight handheld motion(약간의 핸드헬드 움직임)
+\t- People
+\t\t- imperfect skin texture(고르지 않은 피부결)
+\t\t- subtle blemishes(미세한 잡티)
+\t\t- wrinkled fabric(주름진 옷감)
+\t\t- natural and subtle asymmetry(자연스럽고 미세한 비대칭)
+
+
+### 요구사항
 - CTA Action: {cta_action}
 - Video duration: {request.max_duration_seconds}
 - Upload Channel: {request.channel}
-상품 핵심 정보:
+
+### 상품 정보
 {product_prompt_fields}
 """
 
@@ -831,10 +799,10 @@ class OpenRouterClient:
             models.append(self.fallback_model)
 
         for attempt in range(self.max_attempts):
-            # Fallback 모델을 사용한 뒤에도 설정된 재실행 횟수까지 계속 검증한다.
+            # 재시도에서도 Colab과 동일한 prompt를 유지한다.
             model = models[min(attempt, len(models) - 1)]
             try:
-                return self._generate_once(request, model, attempt, last_error)
+                return self._generate_once(request, model)
             except ScriptValidationError as error:
                 last_error = error
             except OpenRouterRequestError as error:
@@ -851,20 +819,8 @@ class OpenRouterClient:
         self,
         request: ScriptGenerationRequest,
         model: str,
-        attempt: int,
-        previous_error: OpenRouterError | None = None,
+        attempt: int = 0,
     ) -> dict[str, Any]:
-        retry_instruction = ""
-        if attempt > 0:
-            retry_instruction = f"""
-
-이전 스크립트 생성 결과가 검증에 실패했습니다.
-실패 사유: {previous_error}
-상품 정보와 기존 광고 방법론·장면 의도는 유지하되, 실패 사유를 해결한 전체 스크립트를 다시 생성하세요.
-영상은 9:16 세로형 조건을 따르되 설정값을 meta에 추가하지 말고,
-상품 데이터에 없는 장면이나 효능을 만들지 마세요. JSON만 반환하세요.
-"""
-
         payload = {
             "model": model,
             "temperature": 0.2,
@@ -882,7 +838,7 @@ class OpenRouterClient:
                 "role": "user",
                 "content": build_script_message_content(
                     request,
-                    build_script_prompt(request) + retry_instruction,
+                    build_script_prompt(request),
                 ),
             }],
         }
