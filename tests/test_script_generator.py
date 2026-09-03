@@ -396,6 +396,8 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("4.5음절", body["messages"][0]["content"])
         self.assertIn("각 장면의 대사 음절 수가 해당 장면 시간 × 4.5를 넘지 않도록 작성하세요.", body["messages"][0]["content"])
         self.assertIn("대사는 장면 시간 안에 읽을 수 있도록 짧게 작성하세요.", body["messages"][0]["content"])
+        self.assertIn("각 장면의 허용 음절 수는 장면 시간(초) × 4.5를 계산한 뒤 소수점 이하는 버린다.", body["messages"][0]["content"])
+        self.assertIn("허용 음절 수를 단 1개라도 초과하는 voiceover는 작성하지 않는다.", body["messages"][0]["content"])
 
     def test_prompt_matches_colab_and_keeps_schema_out_of_prompt(self):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
