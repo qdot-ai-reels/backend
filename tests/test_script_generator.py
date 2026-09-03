@@ -394,6 +394,8 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("Selling Point", body["messages"][0]["content"])
         self.assertIn("EWG 그린등급", body["messages"][0]["content"])
         self.assertIn("4.5음절", body["messages"][0]["content"])
+        self.assertIn("각 장면의 대사 음절 수가 해당 장면 시간 × 4.5를 넘지 않도록 작성하세요.", body["messages"][0]["content"])
+        self.assertIn("대사는 장면 시간 안에 읽을 수 있도록 짧게 작성하세요.", body["messages"][0]["content"])
 
     def test_prompt_matches_colab_and_keeps_schema_out_of_prompt(self):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
