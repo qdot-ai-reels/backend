@@ -721,7 +721,7 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertEqual(result, VALID_DOCUMENT)
         self.assertEqual(len(opener.requests), 5)
 
-    def test_retry_prompt_remains_identical_to_the_initial_prompt(self):
+    def test_tts_regeneration_prompt_includes_correction_instruction(self):
         invalid_document = json.loads(json.dumps(VALID_DOCUMENT))
         invalid_document["scenes"][0]["time_range_sec"] = {"start": 0, "end": 1}
         invalid_document["scenes"][0]["auditory"]["voiceover"] = (
@@ -738,11 +738,19 @@ class ScriptGeneratorTests(unittest.TestCase):
             opener=opener,
         )
 
-        client.generate_script(ScriptGenerationRequest(product=PRODUCT))
+        request = ScriptGenerationRequest(
+            product=PRODUCT,
+            retry_instruction=(
+                "기존 스크립트의 TTS 검증 실패 사유는 다음과 같습니다: "
+                "1번째 scene의 대사가 너무 깁니다. "
+                "해당 장면의 voiceover를 줄여 새 스크립트를 생성하세요."
+            ),
+        )
+        client.generate_script(request)
 
-        first_prompt = json.loads(opener.requests[0].data)["messages"][0]["content"]
-        retry_prompt = json.loads(opener.requests[1].data)["messages"][0]["content"]
-        self.assertEqual(first_prompt, retry_prompt)
+        prompt = json.loads(opener.requests[0].data)["messages"][0]["content"]
+        self.assertIn("기존 스크립트의 TTS 검증 실패 사유", prompt)
+        self.assertIn("voiceover를 줄여 새 스크립트를 생성하세요", prompt)
 
 
 if __name__ == "__main__":

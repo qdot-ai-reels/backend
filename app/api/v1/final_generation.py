@@ -258,13 +258,11 @@ def _generate_script(
         service,
     )
     custom_prompt = payload.get("prompt")
+    retry_instruction = None
     if retry_error is not None:
         retry_instruction = (
             f"기존 스크립트의 TTS 검증 실패 사유는 다음과 같습니다: {retry_error}. "
             "해당 장면의 voiceover를 줄여 새 스크립트를 생성하세요."
-        )
-        custom_prompt = "\n".join(
-            value for value in (custom_prompt, retry_instruction) if value
         )
     request = ScriptGenerationRequest(
         product=product,
@@ -275,6 +273,7 @@ def _generate_script(
         channel=payload.get("channel", "Instagram Reels"),
         target_audience=payload.get("target_audience", "육아에 관심 있는 보호자"),
         supported_video_durations=supported_durations,
+        retry_instruction=retry_instruction,
     )
     return build_script_client(service).generate_script(request)
 

@@ -281,6 +281,7 @@ class ScriptGenerationRequest:
     channel: str = "Instagram Reels"
     target_audience: str = "육아에 관심 있는 보호자"
     supported_video_durations: tuple[int, ...] | None = None
+    retry_instruction: str | None = None
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_duration_seconds <= MAX_SCRIPT_DURATION_SECONDS:
@@ -436,6 +437,7 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 
 ### 상품 정보
 {product_prompt_fields}
+{f"\n\n{request.retry_instruction.strip()}" if request.retry_instruction and request.retry_instruction.strip() else ""}
 """
 
 

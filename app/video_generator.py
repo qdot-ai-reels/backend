@@ -61,6 +61,11 @@ People
 - Do not generate or modify package text or logos.
 """
 
+INFLUENCER_VISIBILITY_PROMPT = (
+    "\n\nThe AI influencer must be clearly visible on screen. "
+    "Do not replace the influencer with only a hand, finger, or an off-screen action."
+)
+
 
 class VideoGenerationError(RuntimeError):
     """Raised when a video generation job cannot be completed."""
@@ -111,8 +116,8 @@ def build_video_prompt(
     has_influencer_image: bool = False,
 ) -> str:
     """Convert a validated script document using the Colab prompt verbatim."""
-    del has_influencer_image
-    return convert_dict_to_formatted_text(script) + "\n\n" + VIDEO_CONDITION_PROMPT
+    visibility_prompt = INFLUENCER_VISIBILITY_PROMPT if has_influencer_image else ""
+    return convert_dict_to_formatted_text(script) + "\n\n" + VIDEO_CONDITION_PROMPT + visibility_prompt
 
 
 def convert_dict_to_formatted_text(data: Mapping[str, Any] | str) -> str:

@@ -306,6 +306,7 @@ class VideoGeneratorTests(unittest.TestCase):
             ["https://example.com/influencer.jpg", "https://example.com/product.jpg"],
         )
         self.assertIn("Use the provided person image as the character reference", request_body["prompt"])
+        self.assertIn("The AI influencer must be clearly visible on screen", request_body["prompt"])
 
     def test_video_prompt_includes_documented_person_and_label_rules(self):
         prompt = build_video_prompt(SCRIPT, has_influencer_image=True)
