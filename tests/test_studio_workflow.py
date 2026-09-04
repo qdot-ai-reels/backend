@@ -4,8 +4,14 @@ from unittest.mock import patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.final_generation import router, run_generation_job
+from app.generation_quotes import (
+    GenerationQuoteError,
+    GenerationQuoteExpiredError,
+    GenerationQuoteMismatchError,
+)
 from app.generation_templates import get_generation_template
 from app.script_generator import ScriptGenerationRequest, build_script_prompt
 from app.settings_service import ProviderCatalogError, VideoModelCapabilities
@@ -255,7 +261,7 @@ class StudioWorkflowApiTests(unittest.TestCase):
                     "total": {"min": 1, "expected": 2, "max": 3},
                     "coverage": "video_only",
                 },
-            ),
+            ) as validate_quote,
             patch(
                 "app.api.v1.final_generation._selected_video_model_id",
                 return_value="video/model",
@@ -266,6 +272,9 @@ class StudioWorkflowApiTests(unittest.TestCase):
             request_hash = create_job.call_args.kwargs["request_hash"]
             existing_job_id = first.json()["job_id"]
             get_identity.return_value = (existing_job_id, request_hash)
+            validate_quote.side_effect = GenerationQuoteExpiredError(
+                "비용 견적이 만료되었습니다."
+            )
             replay = client.post("/generate", json=request)
             changed = client.post(
                 "/generate",
@@ -277,8 +286,186 @@ class StudioWorkflowApiTests(unittest.TestCase):
         self.assertEqual(replay.json()["job_id"], existing_job_id)
         self.assertTrue(replay.json()["idempotent_replay"])
         self.assertEqual(changed.status_code, 409)
+        self.assertEqual(
+            changed.json()["detail"]["code"],
+            "IDEMPOTENCY_CONFLICT",
+        )
+        self.assertIn(
+            "다른 생성 요청",
+            changed.json()["detail"]["message"],
+        )
         self.assertEqual(create_job.call_count, 1)
         self.assertEqual(run_job.call_count, 1)
+        self.assertEqual(validate_quote.call_count, 1)
+
+    def test_matching_request_recovers_from_unique_insert_race(self):
+        request = {
+            "product": {"name": "상품"},
+            "image_url": "https://example.com/product.jpg",
+            "template_id": "ugc_quick_4",
+            "quote_id": "quote-1",
+            "visual_mode": "generated_model",
+            "client_request_id": "racing-request",
+        }
+        duplicate = IntegrityError("insert", {}, Exception("duplicate"))
+        with (
+            patch(
+                "app.api.v1.final_generation.canonical_request_hash",
+                return_value="same-request-hash",
+            ),
+            patch(
+                "app.api.v1.final_generation.get_job_idempotency",
+                side_effect=[None, ("job-from-race", "same-request-hash")],
+            ),
+            patch(
+                "app.api.v1.final_generation.get_job",
+                return_value={
+                    "status": "PROCESSING",
+                    "stage": "VIDEO_GENERATION",
+                    "candidate_count": 1,
+                },
+            ),
+            patch(
+                "app.api.v1.final_generation.validate_product_image_inputs"
+            ),
+            patch(
+                "app.api.v1.final_generation.validate_normalized_influencer_references"
+            ),
+            patch(
+                "app.api.v1.final_generation._selected_video_model_id",
+                return_value="video/model",
+            ),
+            patch(
+                "app.api.v1.final_generation.validate_generation_quote",
+                return_value={"quote_id": "quote-1"},
+            ),
+            patch(
+                "app.api.v1.final_generation.create_job",
+                side_effect=duplicate,
+            ),
+            patch("app.api.v1.final_generation.run_generation_job") as run_job,
+            TestClient(self.app()) as client,
+        ):
+            response = client.post("/generate", json=request)
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["job_id"], "job-from-race")
+        self.assertTrue(response.json()["idempotent_replay"])
+        run_job.assert_not_called()
+
+    def test_changed_request_in_unique_insert_race_has_conflict_code(self):
+        request = {
+            "product": {"name": "상품"},
+            "image_url": "https://example.com/product.jpg",
+            "template_id": "ugc_quick_4",
+            "quote_id": "quote-1",
+            "visual_mode": "generated_model",
+            "client_request_id": "racing-conflict",
+        }
+        duplicate = IntegrityError("insert", {}, Exception("duplicate"))
+        with (
+            patch(
+                "app.api.v1.final_generation.canonical_request_hash",
+                return_value="new-request-hash",
+            ),
+            patch(
+                "app.api.v1.final_generation.get_job_idempotency",
+                side_effect=[None, ("existing-job", "other-request-hash")],
+            ),
+            patch(
+                "app.api.v1.final_generation.validate_product_image_inputs"
+            ),
+            patch(
+                "app.api.v1.final_generation.validate_normalized_influencer_references"
+            ),
+            patch(
+                "app.api.v1.final_generation._selected_video_model_id",
+                return_value="video/model",
+            ),
+            patch(
+                "app.api.v1.final_generation.validate_generation_quote",
+                return_value={"quote_id": "quote-1"},
+            ),
+            patch(
+                "app.api.v1.final_generation.create_job",
+                side_effect=duplicate,
+            ),
+            patch("app.api.v1.final_generation.run_generation_job") as run_job,
+            TestClient(self.app()) as client,
+        ):
+            response = client.post("/generate", json=request)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.json()["detail"]["code"],
+            "IDEMPOTENCY_CONFLICT",
+        )
+        self.assertIn(
+            "이미 존재",
+            response.json()["detail"]["message"],
+        )
+        run_job.assert_not_called()
+
+    def test_quote_submission_errors_have_stable_recovery_codes(self):
+        request = {
+            "product": {"name": "상품"},
+            "image_url": "https://example.com/product.jpg",
+            "template_id": "ugc_quick_4",
+            "quote_id": "quote-1",
+            "visual_mode": "generated_model",
+            "candidate_count": 1,
+            "client_request_id": "quote-error-request",
+        }
+        cases = (
+            (
+                GenerationQuoteExpiredError("비용 견적이 만료되었습니다."),
+                409,
+                "REQUOTE_REQUIRED",
+            ),
+            (
+                GenerationQuoteMismatchError("영상 생성 조건이 다릅니다."),
+                409,
+                "REQUOTE_REQUIRED",
+            ),
+            (
+                GenerationQuoteError("비용 견적을 찾을 수 없습니다."),
+                404,
+                "QUOTE_NOT_FOUND",
+            ),
+        )
+
+        for error, expected_status, expected_code in cases:
+            with (
+                self.subTest(error=type(error).__name__),
+                patch(
+                    "app.api.v1.final_generation.get_job_idempotency",
+                    return_value=None,
+                ),
+                patch(
+                    "app.api.v1.final_generation.validate_product_image_inputs"
+                ),
+                patch(
+                    "app.api.v1.final_generation.validate_normalized_influencer_references"
+                ),
+                patch(
+                    "app.api.v1.final_generation._selected_video_model_id",
+                    return_value="video/model",
+                ),
+                patch(
+                    "app.api.v1.final_generation.validate_generation_quote",
+                    side_effect=error,
+                ),
+                patch("app.api.v1.final_generation.create_job") as create_job,
+                patch("app.api.v1.final_generation.run_generation_job") as run_job,
+                TestClient(self.app()) as client,
+            ):
+                response = client.post("/generate", json=request)
+
+            self.assertEqual(response.status_code, expected_status)
+            self.assertEqual(response.json()["detail"]["code"], expected_code)
+            self.assertEqual(response.json()["detail"]["message"], str(error))
+            create_job.assert_not_called()
+            run_job.assert_not_called()
 
     def test_template_catalog_contract(self):
         with TestClient(self.app()) as client:

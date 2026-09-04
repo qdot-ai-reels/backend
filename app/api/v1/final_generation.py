@@ -11,7 +11,15 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    HTTPException,
+    Path as ApiPath,
+    Query,
+    Response,
+    status,
+)
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.exc import IntegrityError
 
@@ -22,6 +30,7 @@ from app.db import SQLAlchemySettingsRepository, SessionLocal
 from app.generation_jobs import (
     _error_metadata,
     create_job,
+    get_generation_request,
     get_job,
     get_job_idempotency,
     get_job_payload,
@@ -257,6 +266,32 @@ def get_generations(
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 
+@router.get(
+    "/generation-requests/{client_request_id}",
+    status_code=status.HTTP_200_OK,
+    summary="client_request_id로 생성 요청 복구",
+)
+def get_generation_request_status(
+    response: Response,
+    client_request_id: str = ApiPath(min_length=1, max_length=128),
+) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store"
+    request = get_generation_request(client_request_id)
+    if request is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "GENERATION_REQUEST_NOT_FOUND",
+                "message": "client_request_id에 해당하는 생성 요청을 찾을 수 없습니다.",
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+    return {
+        **request,
+        "status_url": f"/api/v1/reels/generate/{request['job_id']}",
+    }
+
+
 def _selected_video_model_id() -> str:
     environment_model = OpenRouterVideoClient.from_env().model
     service = None
@@ -393,7 +428,12 @@ def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTask
             if existing_hash != request_hash:
                 raise HTTPException(
                     status_code=409,
-                    detail="client_request_id가 다른 생성 요청에 이미 사용되었습니다.",
+                    detail={
+                        "code": "IDEMPOTENCY_CONFLICT",
+                        "message": (
+                            "client_request_id가 다른 생성 요청에 이미 사용되었습니다."
+                        ),
+                    },
                 )
             return _generation_replay_response(
                 existing_job_id,
@@ -417,11 +457,20 @@ def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTask
                 model_id=_selected_video_model_id(),
             )
         except GenerationQuoteExpiredError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "REQUOTE_REQUIRED", "message": str(error)},
+            ) from error
         except GenerationQuoteMismatchError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "REQUOTE_REQUIRED", "message": str(error)},
+            ) from error
         except GenerationQuoteError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "QUOTE_NOT_FOUND", "message": str(error)},
+            ) from error
 
     try:
         create_job(
@@ -444,7 +493,10 @@ def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTask
         if existing is None or existing[1] != request_hash:
             raise HTTPException(
                 status_code=409,
-                detail="동일한 client_request_id의 생성 요청이 이미 존재합니다.",
+                detail={
+                    "code": "IDEMPOTENCY_CONFLICT",
+                    "message": "동일한 client_request_id의 생성 요청이 이미 존재합니다.",
+                },
             ) from error
         return _generation_replay_response(
             existing[0],

@@ -191,6 +191,27 @@ def get_job_idempotency(client_request_id: str) -> tuple[str, str | None] | None
         return row.job_id, row.request_hash
 
 
+def get_generation_request(client_request_id: str) -> dict[str, Any] | None:
+    """Return only the safe progress fields for one submitted client request."""
+    with SessionLocal() as session:
+        row = session.execute(
+            select(
+                GenerationJobRow.client_request_id,
+                GenerationJobRow.job_id,
+                GenerationJobRow.status,
+                GenerationJobRow.stage,
+            ).where(GenerationJobRow.client_request_id == client_request_id)
+        ).mappings().one_or_none()
+        if row is None:
+            return None
+        return {
+            "client_request_id": row["client_request_id"],
+            "job_id": row["job_id"],
+            "status": row["status"],
+            "stage": row["stage"],
+        }
+
+
 def list_generation_jobs(
     *,
     limit: int = 24,
