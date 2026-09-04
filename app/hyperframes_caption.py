@@ -54,6 +54,7 @@ def build_composition_html(
         raise ValueError("HyperFrames composition의 영상 길이는 양수여야 합니다.")
 
     cues: list[str] = []
+    animations: list[str] = []
     duration = float(duration_seconds or 0)
     for index, cue in enumerate(transcript):
         text = cue.get("text")
@@ -66,6 +67,9 @@ def build_composition_html(
         duration = max(duration, float(end))
         cues.append(
             f'''      <div id="caption-{index}" class="caption clip" data-start="{float(start)}" data-duration="{float(end - start)}" data-track-index="5">{escape(text)}</div>'''
+        )
+        animations.append(
+            f'''      window.__timelines["main"].fromTo("#caption-{index}", {{ opacity: 0, y: 28, scale: 0.97 }}, {{ opacity: 1, y: 0, scale: 1, duration: 0.18, ease: "power2.out" }}, {float(start)});'''
         )
 
     if duration <= 0:
@@ -104,6 +108,14 @@ def build_composition_html(
     <script>
       window.__timelines = window.__timelines || {{}};
       window.__timelines["main"] = gsap.timeline({{ paused: true }});
+{chr(10).join(animations)}
+      // Keep the registered timeline seekable across the entire composition.
+      window.__timelines["main"].fromTo(
+        "#root",
+        {{ scale: 1 }},
+        {{ scale: 1.01, duration: {duration}, ease: "none" }},
+        0
+      );
     </script>
   </body>
 </html>
