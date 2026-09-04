@@ -55,15 +55,23 @@ def validate_image_dimensions(
     image_url: str,
     *,
     minimum_dimension: int = 100,
+    max_aspect_ratio: float | None = 8.0,
     dimensions_reader=read_image_dimensions,
 ) -> tuple[int, int]:
-    """Reject images whose width or height is smaller than the required minimum."""
+    """Reject images that are too small or have an extreme aspect ratio."""
     width, height = dimensions_reader(image_url)
     if width < minimum_dimension or height < minimum_dimension:
         raise ValueError(
             f"이미지 크기가 너무 작습니다: {width}x{height}. "
             f"가로와 세로는 각각 {minimum_dimension}px 이상이어야 합니다."
         )
+    if max_aspect_ratio is not None:
+        aspect_ratio = max(width / height, height / width)
+        if aspect_ratio > max_aspect_ratio:
+            raise ValueError(
+                f"이미지 가로·세로 비율이 너무 큽니다: {width}x{height}. "
+                f"최대 허용 비율은 {max_aspect_ratio:g}입니다."
+            )
     return width, height
 
 
