@@ -148,6 +148,29 @@ class HyperFramesCaptionTests(unittest.TestCase):
         self.assertIn("첫 장면 &lt;확인&gt;", html)
         self.assertNotIn("첫 장면 <확인>", html)
 
+    def test_build_composition_html_registers_caption_animations_on_timeline(self) -> None:
+        html = build_composition_html(
+            video_filename="combined.mp4",
+            transcript=[
+                {"id": "w0", "text": "첫 장면", "start": 0.0, "end": 3.0},
+                {"id": "w1", "text": "마지막 장면", "start": 3.0, "end": 8.0},
+            ],
+            duration_seconds=8,
+        )
+
+        self.assertIn(
+            'window.__timelines["main"].fromTo("#caption-0"',
+            html,
+        )
+        self.assertIn(
+            'window.__timelines["main"].fromTo("#caption-1"',
+            html,
+        )
+        self.assertIn(
+            'window.__timelines["main"].fromTo(\n        "#root"',
+            html,
+        )
+
     def test_build_composition_html_allows_composition_without_captions(self) -> None:
         html = build_composition_html(
             video_filename="combined.mp4",
