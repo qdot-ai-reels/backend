@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import math
 import subprocess
 from pathlib import Path
 
@@ -46,6 +49,120 @@ class MediaDurationMismatchError(MediaCombineError):
 
 
 DEFAULT_DURATION_TOLERANCE_SECONDS = 0.1
+PRODUCTION_LOUDNESS_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11"
+PRODUCTION_STEREO_FILTER = "aformat=channel_layouts=stereo"
+logger = logging.getLogger(__name__)
+
+
+def _parse_loudness_measurement(output: str) -> dict[str, float] | None:
+    """Extract and validate the flat JSON object printed by FFmpeg loudnorm."""
+    required = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
+    bounds = {
+        "input_i": (-99.0, 0.0),
+        "input_tp": (-99.0, 99.0),
+        "input_lra": (0.0, 99.0),
+        "input_thresh": (-99.0, 0.0),
+        "target_offset": (-99.0, 99.0),
+    }
+    decoder = json.JSONDecoder()
+    for index in range(len(output) - 1, -1, -1):
+        if output[index] != "{":
+            continue
+        try:
+            payload, _ = decoder.raw_decode(output[index:])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or any(key not in payload for key in required):
+            continue
+        values: dict[str, float] = {}
+        try:
+            for key in required:
+                raw_value = payload[key]
+                if isinstance(raw_value, bool):
+                    raise ValueError
+                value = float(raw_value)
+                minimum, maximum = bounds[key]
+                if not math.isfinite(value) or not minimum <= value <= maximum:
+                    raise ValueError
+                values[key] = value
+        except (TypeError, ValueError):
+            continue
+        return values
+    return None
+
+
+def _measure_audio_loudness(audio_path: Path) -> dict[str, float] | None:
+    """Measure EBU R128 values for the deterministic second loudnorm pass."""
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-hide_banner",
+                "-nostats",
+                "-v",
+                "info",
+                "-i",
+                str(audio_path),
+                "-map",
+                "0:a:0",
+                "-vn",
+                "-sn",
+                "-dn",
+                "-af",
+                (
+                    f"{PRODUCTION_STEREO_FILTER},"
+                    f"{PRODUCTION_LOUDNESS_FILTER}:print_format=json"
+                ),
+                "-f",
+                "null",
+                "-",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        logger.warning(
+            "audio loudness measurement unavailable; using safe one-pass fallback: %s",
+            type(error).__name__,
+        )
+        return None
+    if result.returncode != 0:
+        logger.warning(
+            "audio loudness measurement failed; using safe one-pass fallback: returncode=%s",
+            result.returncode,
+        )
+        return None
+    measurement = _parse_loudness_measurement(result.stderr or "")
+    if measurement is None:
+        logger.warning(
+            "audio loudness measurement was invalid; using safe one-pass fallback"
+        )
+    return measurement
+
+
+def _format_loudness_value(value: float) -> str:
+    return format(value, ".12g")
+
+
+def _production_loudness_filter(measurement: dict[str, float] | None) -> str:
+    if measurement is None:
+        return PRODUCTION_LOUDNESS_FILTER
+    return ":".join(
+        (
+            PRODUCTION_LOUDNESS_FILTER,
+            f"measured_I={_format_loudness_value(measurement['input_i'])}",
+            f"measured_TP={_format_loudness_value(measurement['input_tp'])}",
+            f"measured_LRA={_format_loudness_value(measurement['input_lra'])}",
+            f"measured_thresh={_format_loudness_value(measurement['input_thresh'])}",
+            f"offset={_format_loudness_value(measurement['target_offset'])}",
+            "linear=true",
+        )
+    )
 
 
 def remove_audio_track(video_path: str | Path, output_path: str | Path) -> Path:
@@ -116,7 +233,7 @@ def combine_video_and_audio(
     output_path: str | Path,
     duration_tolerance_seconds: float = DEFAULT_DURATION_TOLERANCE_SECONDS,
 ) -> Path:
-    """Mux video and narration into an MP4 without re-encoding the video."""
+    """Mux normalized narration into an MP4 without re-encoding the video."""
     if duration_tolerance_seconds < 0:
         raise ValueError("duration_tolerance_seconds는 0 이상이어야 합니다.")
 
@@ -136,6 +253,7 @@ def combine_video_and_audio(
     if abs(video_duration - audio_duration) > duration_tolerance_seconds:
         raise MediaDurationMismatchError(video_duration, audio_duration)
 
+    loudness_filter = _production_loudness_filter(_measure_audio_loudness(audio))
     output.parent.mkdir(parents=True, exist_ok=True)
     command = [
         "ffmpeg",
@@ -147,7 +265,7 @@ def combine_video_and_audio(
         "-i",
         str(audio),
         "-filter_complex",
-        "[1:a]anull[audio]",
+        f"[1:a]{PRODUCTION_STEREO_FILTER},{loudness_filter}[audio]",
         "-map",
         "0:v:0",
         "-map",
@@ -158,6 +276,12 @@ def combine_video_and_audio(
         "aac",
         "-b:a",
         "128k",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-movflags",
+        "+faststart",
         str(output),
     ]
 

@@ -25,7 +25,7 @@ class GlobalSettingsRow(Base):
     openrouter_tts_model: Mapped[str | None] = mapped_column(String(255))
     openrouter_video_model: Mapped[str | None] = mapped_column(String(255))
     openrouter_tts_voice: Mapped[str] = mapped_column(String(255), default="")
-    video_min_resolution: Mapped[str] = mapped_column(String(32), default="720p")
+    video_min_resolution: Mapped[str] = mapped_column(String(32), default="1080p")
     video_max_resolution: Mapped[str] = mapped_column(String(32), default="1080p")
     video_max_duration_seconds: Mapped[int] = mapped_column(Integer, default=15)
     # One initial request plus four retries equals five total attempts.
@@ -49,7 +49,10 @@ class GenerationJobRow(Base):
     input_type: Mapped[str] = mapped_column(String(32))
     product_json: Mapped[str | None] = mapped_column(Text)
     script_json: Mapped[str | None] = mapped_column(Text)
+    payload_json: Mapped[str | None] = mapped_column(Text)
     image_url: Mapped[str | None] = mapped_column(String(2048))
+    candidate_count: Mapped[int] = mapped_column(Integer, default=0)
+    candidates_json: Mapped[str | None] = mapped_column(Text)
     video_job_id: Mapped[str | None] = mapped_column(String(128))
     caption_job_id: Mapped[str | None] = mapped_column(String(128))
     output_path: Mapped[str | None] = mapped_column(String(2048))
@@ -89,7 +92,7 @@ def init_db() -> None:
         "openrouter_tts_api_key_encrypted": ("VARCHAR(1024)", "''"),
         "openrouter_video_api_key_encrypted": ("VARCHAR(1024)", "''"),
         "openrouter_tts_model": ("VARCHAR(255)", "''"),
-        "video_min_resolution": ("VARCHAR(32)", "'720p'"),
+        "video_min_resolution": ("VARCHAR(32)", "'1080p'"),
         "video_max_resolution": ("VARCHAR(32)", "'1080p'"),
         "script_generation_retries": ("INTEGER", "4"),
         "video_generation_retries": ("INTEGER", "2"),
@@ -101,6 +104,21 @@ def init_db() -> None:
         if "stage" not in generation_job_columns:
             connection.execute(
                 text("ALTER TABLE generation_jobs ADD COLUMN stage VARCHAR(32)")
+            )
+        if "payload_json" not in generation_job_columns:
+            connection.execute(
+                text("ALTER TABLE generation_jobs ADD COLUMN payload_json TEXT")
+            )
+        if "candidate_count" not in generation_job_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE generation_jobs ADD COLUMN candidate_count "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
+            )
+        if "candidates_json" not in generation_job_columns:
+            connection.execute(
+                text("ALTER TABLE generation_jobs ADD COLUMN candidates_json TEXT")
             )
         if "openrouter_api_key_encrypted" in columns and "openrouter_script_api_key_encrypted" not in columns:
             connection.execute(
@@ -150,7 +168,8 @@ def init_db() -> None:
             connection.execute(
                 text(
                     "UPDATE global_settings "
-                    "SET video_max_resolution = video_resolution "
+                    "SET video_min_resolution = video_resolution, "
+                    "video_max_resolution = video_resolution "
                     "WHERE video_resolution IS NOT NULL"
                 )
             )

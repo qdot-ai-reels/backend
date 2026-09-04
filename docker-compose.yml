@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres1234}
       POSTGRES_DB: ${POSTGRES_DB:-app_db}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-55432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -20,13 +20,17 @@ services:
     build: .
     restart: always
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8000}:8000"
     env_file:
-      - .env
+      - path: ../.env
+        required: false
+      - path: .env
+        required: false
     volumes:
       - .:/app
       - ./runtime/hyperframes:/var/lib/quedot/hyperframes
     environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres1234}@db:5432/${POSTGRES_DB:-app_db}
       HYPERFRAMES_RUNNER_URL: http://hyperframes:8787
     depends_on:
       db:
@@ -46,6 +50,9 @@ services:
       - "8787"
     environment:
       HYPERFRAMES_NO_TELEMETRY: "1"
+      HYPERFRAMES_NO_UPDATE_CHECK: "1"
+      HYPERFRAMES_RENDER_QUALITY: ${HYPERFRAMES_RENDER_QUALITY:-high}
+      HYPERFRAMES_VIDEO_BITRATE: ${HYPERFRAMES_VIDEO_BITRATE:-10M}
     volumes:
       - ./runtime/hyperframes:/workspace
     healthcheck:

@@ -54,6 +54,7 @@ def build_composition_html(
         raise ValueError("HyperFrames composition의 영상 길이는 양수여야 합니다.")
 
     cues: list[str] = []
+    animations: list[str] = []
     duration = float(duration_seconds or 0)
     for index, cue in enumerate(transcript):
         text = cue.get("text")
@@ -66,6 +67,9 @@ def build_composition_html(
         duration = max(duration, float(end))
         cues.append(
             f'''      <div id="caption-{index}" class="caption clip" data-start="{float(start)}" data-duration="{float(end - start)}" data-track-index="5">{escape(text)}</div>'''
+        )
+        animations.append(
+            f'''      window.__timelines["main"].fromTo("#caption-{index}", {{ opacity: 0, y: 28, scale: 0.97 }}, {{ opacity: 1, y: 0, scale: 1, duration: 0.18, ease: "power2.out" }}, {float(start)});'''
         )
 
     if duration <= 0:
@@ -81,17 +85,28 @@ def build_composition_html(
     <style>
       * {{ box-sizing: border-box; }}
       html, body {{ margin: 0; width: {width}px; height: {height}px; overflow: hidden; background: #000; }}
+      #root {{ position: relative; width: {width}px; height: {height}px; overflow: hidden; }}
       .caption {{
         position: absolute;
-        left: 80px;
-        right: 80px;
-        bottom: 260px;
-        padding: 24px 32px;
+        left: 50%;
+        width: min(880px, calc(100% - 144px));
+        bottom: 300px;
+        transform: translateX(-50%);
+        padding: 18px 30px 20px;
         color: #fff;
-        background: rgba(0, 0, 0, 0.62);
-        border-radius: 18px;
-        font: 700 56px/1.2 Inter, sans-serif;
+        background: rgba(8, 8, 10, 0.48);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 22px;
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+        backdrop-filter: blur(8px);
+        font: 800 58px/1.18 Pretendard, "Apple SD Gothic Neo", sans-serif;
+        letter-spacing: -1.4px;
         text-align: center;
+        text-wrap: balance;
+        white-space: pre-line;
+        max-height: 178px;
+        overflow: hidden;
+        text-shadow: 0 2px 7px rgba(0, 0, 0, 0.72);
       }}
     </style>
   </head>
@@ -104,6 +119,15 @@ def build_composition_html(
     <script>
       window.__timelines = window.__timelines || {{}};
       window.__timelines["main"] = gsap.timeline({{ paused: true }});
+{chr(10).join(animations)}
+      // Keep the registered timeline seekable across the entire composition,
+      // including videos whose captions finish animating near the first frame.
+      window.__timelines["main"].fromTo(
+        "#root",
+        {{ scale: 1 }},
+        {{ scale: 1.01, duration: {duration}, ease: "none" }},
+        0
+      );
     </script>
   </body>
 </html>

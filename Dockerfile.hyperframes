@@ -8,11 +8,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
-RUN npm install --global hyperframes@0.8.12
+RUN npm install --global hyperframes@0.8.27
 COPY hyperframes_runner.mjs /opt/hyperframes_runner.mjs
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     HYPERFRAMES_BROWSER_PATH=/usr/bin/chromium \
     PRODUCER_HEADLESS_SHELL_PATH=/usr/bin/chromium \
     PRODUCER_FORCE_SCREENSHOT=true \
+    HYPERFRAMES_NO_UPDATE_CHECK=1 \
     HYPERFRAMES_WORKSPACE=/workspace
 CMD ["node", "/opt/hyperframes_runner.mjs"]

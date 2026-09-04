@@ -32,7 +32,7 @@ class GlobalSettings:
     openrouter_tts_model: str | None = None
     openrouter_video_model: str | None = None
     openrouter_tts_voice: str = ""
-    video_min_resolution: str = "720p"
+    video_min_resolution: str = "1080p"
     video_max_resolution: str = "1080p"
     video_max_duration_seconds: int = 15
     # One initial request plus four retries equals five total attempts.

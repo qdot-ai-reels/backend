@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+from app.core.config import settings as app_settings
+
 from app.script_generator import OpenRouterClient, select_supported_video_duration
 from app.settings_service import (
     OpenRouterVideoCatalogClient,
@@ -35,7 +37,12 @@ def build_script_client(service: SettingsService | None = None) -> OpenRouterCli
 
 def get_video_model_capabilities(service: SettingsService | None = None) -> VideoModelCapabilities:
     environment_client = OpenRouterVideoClient.from_env()
-    api_key = os.getenv("OPENROUTER_VIDEO_API_KEY", "")
+    api_key = (
+        os.getenv("OPENROUTER_VIDEO_API_KEY")
+        or os.getenv("OPENROUTER_API_KEY")
+        or app_settings.OPENROUTER_API_KEY
+        or ""
+    )
     if service is not None:
         api_key = service.get_video_api_key() or api_key
     selected_model = environment_client.model
@@ -59,7 +66,12 @@ def resolve_script_generation_duration(
     max_duration_seconds: int, service: SettingsService | None = None
 ) -> tuple[int, tuple[int, ...] | None]:
     """Resolve a script duration against the selected video's live capabilities."""
-    api_key = os.getenv("OPENROUTER_VIDEO_API_KEY", "")
+    api_key = (
+        os.getenv("OPENROUTER_VIDEO_API_KEY")
+        or os.getenv("OPENROUTER_API_KEY")
+        or app_settings.OPENROUTER_API_KEY
+        or ""
+    )
     if service is not None:
         api_key = service.get_video_api_key() or api_key
 
@@ -128,9 +140,13 @@ def build_tts_settings(service: SettingsService | None = None) -> OpenRouterTTSS
         return environment_settings
     persisted = service.get_runtime_settings()
     return OpenRouterTTSSettings(
-        api_key=environment_settings.api_key
-        or (service.get_tts_api_key() if service is not None else "")
-        or "",
+        api_key=(
+            service.get_tts_api_key()
+            or os.getenv("OPENROUTER_TTS_API_KEY")
+            or os.getenv("OPENROUTER_API_KEY")
+            or app_settings.OPENROUTER_API_KEY
+            or ""
+        ),
         model=(
             persisted.openrouter_tts_model
             if service is not None and persisted.openrouter_tts_model

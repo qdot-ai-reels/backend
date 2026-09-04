@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import tempfile
@@ -11,6 +12,12 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+
+DEFAULT_TTS_MODEL = "google/gemini-3.1-flash-tts-preview"
+DEFAULT_TTS_VOICE = "Aoede"
+GEMINI_PCM_SAMPLE_RATE = 24_000
+MAX_NARRATION_TIME_STRETCH_RATIO = 1.3
 
 
 class TTSGenerationError(RuntimeError):
@@ -122,17 +129,24 @@ def build_scene_narrations(script: Mapping[str, Any]) -> list[SceneNarration]:
 @dataclass(frozen=True)
 class OpenRouterTTSSettings:
     api_key: str = ""
-    model: str = ""
-    voice_name: str = ""
+    model: str = DEFAULT_TTS_MODEL
+    voice_name: str = DEFAULT_TTS_VOICE
     language_code: str = "ko-KR"
     syllables_per_second: float = 4.5
 
     @classmethod
     def from_env(cls) -> "OpenRouterTTSSettings":
+        from app.core.config import settings as app_settings
+
         return cls(
-            api_key=os.getenv("OPENROUTER_TTS_API_KEY", ""),
-            model=os.getenv("OPENROUTER_TTS_MODEL", ""),
-            voice_name=os.getenv("OPENROUTER_TTS_VOICE", ""),
+            api_key=(
+                os.getenv("OPENROUTER_TTS_API_KEY")
+                or os.getenv("OPENROUTER_API_KEY")
+                or app_settings.OPENROUTER_API_KEY
+                or ""
+            ),
+            model=os.getenv("OPENROUTER_TTS_MODEL") or DEFAULT_TTS_MODEL,
+            voice_name=os.getenv("OPENROUTER_TTS_VOICE") or DEFAULT_TTS_VOICE,
             language_code=os.getenv("GOOGLE_TTS_LANGUAGE_CODE", "ko-KR"),
             syllables_per_second=float(
                 os.getenv("GOOGLE_TTS_SYLLABLES_PER_SECOND", "4.5")
@@ -152,18 +166,24 @@ class OpenRouterTTSClient:
         max_retries: int = 5,
         retry_duration_errors: bool = True,
         settings: OpenRouterTTSSettings | None = None,
+        time_fitter: Callable[[bytes, float, float], bytes] | None = None,
+        max_time_stretch_ratio: float = MAX_NARRATION_TIME_STRETCH_RATIO,
     ) -> None:
-        if duration_tolerance_seconds < 0:
+        if not math.isfinite(duration_tolerance_seconds) or duration_tolerance_seconds < 0:
             raise ValueError("duration_tolerance_seconds는 0 이상이어야 합니다.")
         if max_retries < 0:
             raise ValueError("max_retries는 0 이상이어야 합니다.")
+        if not math.isfinite(max_time_stretch_ratio) or max_time_stretch_ratio < 1:
+            raise ValueError("max_time_stretch_ratio는 1 이상이어야 합니다.")
         self.settings = settings or OpenRouterTTSSettings.from_env()
         self.synthesizer = synthesizer or self._create_openrouter_synthesizer()
         self.combiner = combiner or combine_scene_audio
         self.duration_reader = duration_reader or read_audio_duration
+        self.time_fitter = time_fitter or stretch_audio_to_duration
         self.duration_tolerance_seconds = duration_tolerance_seconds
         self.max_retries = max_retries
         self.retry_duration_errors = retry_duration_errors
+        self.max_time_stretch_ratio = max_time_stretch_ratio
 
     def generate_narration(self, script: Mapping[str, Any]) -> bytes:
         scene_narrations = build_scene_narrations(script)
@@ -184,36 +204,72 @@ class OpenRouterTTSClient:
     def _generate_narration_once(
         self, scene_narrations: Sequence[SceneNarration]
     ) -> bytes:
-        generated = []
-        for narration in scene_narrations:
-            if not narration.text:
-                generated.append(narration)
-                continue
+        # A reels narration is one performance, even when the script is split into
+        # visual scenes. Synthesizing every scene separately resets prosody and adds
+        # provider-side leading/trailing silence at every cut. Keep scene metadata
+        # for captions and fallback edits, but synthesize all spoken fragments once.
+        voiced = [narration for narration in scene_narrations if narration.text]
+        generated = list(scene_narrations)
+        if voiced:
+            continuous_text = " ".join(narration.text for narration in voiced)
             try:
-                audio_content = self.synthesizer(narration.text)
+                audio_content = self.synthesizer(continuous_text)
             except TTSGenerationError:
                 raise
             except Exception as error:
-                raise TTSGenerationError(
-                    f"{narration.scene_number}번째 장면의 TTS 생성에 실패했습니다."
-                ) from error
-            expected_seconds = narration.end_seconds - narration.start_seconds
+                raise TTSGenerationError("내레이션 TTS 생성에 실패했습니다.") from error
+
+            first_voiced = voiced[0]
+            last_voiced = voiced[-1]
+            expected_seconds = last_voiced.end_seconds - first_voiced.start_seconds
             actual_seconds = self.duration_reader(audio_content)
+            if not math.isfinite(actual_seconds) or actual_seconds <= 0:
+                raise TTSGenerationError(
+                    "생성된 내레이션의 재생 시간이 올바르지 않습니다."
+                )
             if actual_seconds > expected_seconds + self.duration_tolerance_seconds:
                 raise SceneAudioDurationError(
-                    scene_number=narration.scene_number,
+                    scene_number=last_voiced.scene_number,
                     expected_seconds=expected_seconds,
                     actual_seconds=actual_seconds,
                 )
 
-            generated.append(
-                SceneNarration(
-                    scene_number=narration.scene_number,
-                    start_seconds=narration.start_seconds,
-                    end_seconds=narration.end_seconds,
-                    text=narration.text,
-                    audio_content=audio_content,
-                )
+            # Keep one provider performance, but slow it down enough that later
+            # lines remain close to their scene captions. A hard ratio cap avoids
+            # turning a very short script into unnaturally drawn-out speech; the
+            # combiner preserves any remaining gap as silence.
+            fitted_seconds = min(
+                expected_seconds,
+                actual_seconds * self.max_time_stretch_ratio,
+            )
+            if (
+                fitted_seconds - actual_seconds
+                > self.duration_tolerance_seconds
+            ):
+                try:
+                    audio_content = self.time_fitter(
+                        audio_content,
+                        actual_seconds,
+                        fitted_seconds,
+                    )
+                except TTSGenerationError:
+                    raise
+                except Exception as error:
+                    raise TTSGenerationError(
+                        "내레이션 재생 시간 조정에 실패했습니다."
+                    ) from error
+                if not audio_content:
+                    raise TTSGenerationError(
+                        "내레이션 재생 시간 조정 결과가 비어 있습니다."
+                    )
+
+            first_index = first_voiced.scene_number - 1
+            generated[first_index] = SceneNarration(
+                scene_number=first_voiced.scene_number,
+                start_seconds=first_voiced.start_seconds,
+                end_seconds=first_voiced.end_seconds,
+                text=continuous_text,
+                audio_content=audio_content,
             )
 
         try:
@@ -242,7 +298,7 @@ class OpenRouterTTSClient:
     def _create_openrouter_synthesizer(self) -> Callable[[str], bytes]:
         if not self.settings.api_key:
             raise TTSConfigurationError(
-                "OPENROUTER_TTS_API_KEY가 설정되지 않았습니다."
+                "OPENROUTER_TTS_API_KEY 또는 OPENROUTER_API_KEY가 설정되지 않았습니다."
             )
         if not self.settings.model:
             raise TTSConfigurationError(
@@ -250,10 +306,15 @@ class OpenRouterTTSClient:
             )
 
         def synthesize(text: str) -> bytes:
+            response_format = (
+                "pcm"
+                if self.settings.model.startswith("google/gemini-")
+                else "mp3"
+            )
             payload = {
                 "input": text,
                 "model": self.settings.model,
-                "response_format": "mp3",
+                "response_format": response_format,
             }
             if self.settings.voice_name.strip():
                 payload["voice"] = self.settings.voice_name.strip()
@@ -268,7 +329,10 @@ class OpenRouterTTSClient:
             )
             try:
                 with urlopen(request, timeout=60) as response:
-                    return response.read()
+                    audio_content = response.read()
+                if response_format == "pcm":
+                    return convert_pcm_to_mp3(audio_content)
+                return audio_content
             except HTTPError as error:
                 raise TTSGenerationError(
                     f"OpenRouter TTS 요청이 거부되었습니다: HTTP {error.code}"
@@ -279,6 +343,50 @@ class OpenRouterTTSClient:
                 ) from error
 
         return synthesize
+
+
+def convert_pcm_to_mp3(audio_content: bytes) -> bytes:
+    """Wrap Gemini's 24 kHz signed 16-bit mono PCM response as an MP3."""
+    if not audio_content:
+        raise TTSGenerationError("OpenRouter TTS가 빈 PCM 음성을 반환했습니다.")
+    with tempfile.TemporaryDirectory(prefix="quedot-tts-pcm-") as directory:
+        directory_path = Path(directory)
+        input_path = directory_path / "narration.pcm"
+        output_path = directory_path / "narration.mp3"
+        input_path.write_bytes(audio_content)
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-v",
+                    "error",
+                    "-f",
+                    "s16le",
+                    "-ar",
+                    str(GEMINI_PCM_SAMPLE_RATE),
+                    "-ac",
+                    "1",
+                    "-i",
+                    str(input_path),
+                    "-c:a",
+                    "libmp3lame",
+                    "-b:a",
+                    "128k",
+                    str(output_path),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except FileNotFoundError as error:
+            raise TTSGenerationError("FFmpeg가 설치되지 않았습니다.") from error
+        except subprocess.CalledProcessError as error:
+            detail = error.stderr.decode("utf-8", errors="replace")[-500:]
+            raise TTSGenerationError(
+                f"Gemini PCM 음성 변환에 실패했습니다: {detail}"
+            ) from error
+        return output_path.read_bytes()
 
 
 def read_audio_duration(audio_content: bytes) -> float:
@@ -313,6 +421,70 @@ def read_audio_duration(audio_content: bytes) -> float:
         return float(result.stdout.strip())
     except ValueError as error:
         raise TTSGenerationError("FFprobe가 올바른 음성 길이를 반환하지 않았습니다.") from error
+
+
+def stretch_audio_to_duration(
+    audio_content: bytes,
+    source_seconds: float,
+    target_seconds: float,
+) -> bytes:
+    """Pitch-preservingly slow narration to a longer, bounded target duration."""
+    if not audio_content:
+        raise TTSGenerationError("재생 시간을 조정할 음성이 비어 있습니다.")
+    if (
+        not math.isfinite(source_seconds)
+        or not math.isfinite(target_seconds)
+        or source_seconds <= 0
+        or target_seconds <= 0
+    ):
+        raise TTSGenerationError("음성 재생 시간 조정 범위가 올바르지 않습니다.")
+    if target_seconds <= source_seconds:
+        return audio_content
+
+    tempo = source_seconds / target_seconds
+    with tempfile.TemporaryDirectory(prefix="quedot-tts-fit-") as directory:
+        directory_path = Path(directory)
+        input_path = directory_path / "narration-input.mp3"
+        output_path = directory_path / "narration-fitted.mp3"
+        input_path.write_bytes(audio_content)
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-v",
+                    "error",
+                    "-i",
+                    str(input_path),
+                    "-filter:a",
+                    (
+                        f"atempo={tempo:.8f},apad,"
+                        f"atrim=duration={target_seconds:.3f}"
+                    ),
+                    "-c:a",
+                    "libmp3lame",
+                    "-b:a",
+                    "128k",
+                    str(output_path),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except FileNotFoundError as error:
+            raise TTSGenerationError("FFmpeg가 설치되지 않았습니다.") from error
+        except subprocess.CalledProcessError as error:
+            detail = error.stderr.decode("utf-8", errors="replace")[-500:]
+            raise TTSGenerationError(
+                f"내레이션 재생 시간 조정에 실패했습니다: {detail}"
+            ) from error
+
+        fitted_audio = output_path.read_bytes()
+        if not fitted_audio:
+            raise TTSGenerationError(
+                "내레이션 재생 시간 조정 결과가 비어 있습니다."
+            )
+        return fitted_audio
 
 
 def combine_scene_audio(scene_narrations: Sequence[SceneNarration]) -> bytes:

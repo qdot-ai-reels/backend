@@ -32,7 +32,8 @@ LOCAL_VIDEO_OUTPUT_DIR = Path(os.getenv("VIDEO_OUTPUT_DIR", "runtime/videos"))
 class VideoGenerationBody(BaseModel):
     script: dict[str, Any] = Field(min_length=1)
     image_url: str = Field(min_length=1)
-    influencer_image_url: str = Field(min_length=1)
+    influencer_image_url: str | None = Field(default=None, min_length=1)
+    influencer_image_urls: list[str] = Field(default_factory=list, max_length=2)
     detail_image_urls: list[str] = Field(default_factory=list)
     resolution: str | None = None
     aspect_ratio: Literal["9:16"] = "9:16"
@@ -50,6 +51,10 @@ def generate_video(
 ) -> dict[str, Any]:
     if not isinstance(service, SettingsService):
         service = None
+    influencer_image_urls = tuple(
+        body.influencer_image_urls
+        or ([body.influencer_image_url] if body.influencer_image_url else [])
+    )
     request = VideoGenerationRequest(
         script=body.script,
         image_url=body.image_url,
@@ -57,6 +62,7 @@ def generate_video(
         aspect_ratio=body.aspect_ratio,
         generate_audio=body.generate_audio,
         influencer_image_url=body.influencer_image_url,
+        influencer_image_urls=influencer_image_urls,
         detail_image_urls=tuple(body.detail_image_urls),
     )
 
@@ -71,6 +77,7 @@ def generate_video(
                 aspect_ratio=request.aspect_ratio,
                 generate_audio=request.generate_audio,
                 influencer_image_url=request.influencer_image_url,
+                influencer_image_urls=request.influencer_image_urls,
                 detail_image_urls=request.detail_image_urls,
             )
         client = build_video_client(service, capabilities)
@@ -83,6 +90,7 @@ def generate_video(
             ),
             publish_video=publish_validated_video,
             max_retries=max_retries,
+            production_mode=True,
         ).run(request)
     except ProviderCatalogError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
@@ -181,8 +189,8 @@ def select_video_resolution(
     service: SettingsService | None,
     capabilities: Any,
 ) -> str:
-    minimum = service.get_runtime_settings().video_min_resolution if service else "480p"
-    maximum = service.get_runtime_settings().video_max_resolution if service else "480p"
+    minimum = service.get_runtime_settings().video_min_resolution if service else "1080p"
+    maximum = service.get_runtime_settings().video_max_resolution if service else "1080p"
 
     def pixels(value: str) -> int:
         numeric = value.rstrip("p")

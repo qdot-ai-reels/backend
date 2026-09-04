@@ -17,6 +17,7 @@ from app.image_metadata import (
     read_image_dimensions,
     read_image_format,
     validate_image_inputs,
+    validate_normalized_influencer_references,
 )
 from app.script_generator import (
     OpenRouterConfigurationError,
@@ -27,8 +28,14 @@ from app.script_generator import (
 
 
 DEFAULT_VIDEO_API_URL = "https://openrouter.ai/api/v1/videos"
-DEFAULT_VIDEO_MODEL = "bytedance/seedance-2.0-mini"
+DEFAULT_VIDEO_MODEL = "bytedance/seedance-2.0"
 DEFAULT_SUPPORTED_DURATIONS = tuple(range(4, 16))
+# OpenRouter accepts an exact WIDTHxHEIGHT `size` in place of the more
+# ambiguous resolution/aspect pair. Only map combinations confirmed by the
+# provider catalog; unknown combinations retain the generic API fields.
+EXACT_VIDEO_SIZE_BY_RESOLUTION_AND_ASPECT_RATIO = {
+    ("1080p", "9:16"): "1080x1920",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -66,6 +73,16 @@ INFLUENCER_VISIBILITY_PROMPT = (
     "Do not replace the influencer with only a hand, finger, or an off-screen action."
 )
 
+GENERATED_MODEL_PROMPT = """
+
+The video must feature one clearly visible, fully synthetic adult Korean woman as the UGC presenter.
+Create the presenter from the text prompt only; do not imitate or reconstruct any real person.
+Show her upper body and face for most of the clip while she naturally holds or presents the supplied product.
+Keep the presenter, outfit, hands, and product consistent throughout the clip.
+The supplied product image is a product identity reference, not the opening frame.
+Use a vertical social-video composition with the presenter and product both inside the center safe area.
+"""
+
 
 class VideoGenerationError(RuntimeError):
     """Raised when a video generation job cannot be completed."""
@@ -96,11 +113,15 @@ class VideoGenerationTimeoutError(VideoGenerationError):
 class VideoGenerationRequest:
     script: Mapping[str, Any]
     image_url: str
+    # API orchestration selects 1080p explicitly. The reusable low-level value
+    # stays 720p for callers that construct requests without capability lookup.
     resolution: str = "720p"
     aspect_ratio: str = "9:16"
     generate_audio: bool = False
     influencer_image_url: str | None = None
+    influencer_image_urls: tuple[str, ...] = ()
     detail_image_urls: tuple[str, ...] = ()
+    visual_mode: str = "product_only"
 
 
 @dataclass(frozen=True)
@@ -114,10 +135,20 @@ class VideoGenerationResult:
 def build_video_prompt(
     script: Mapping[str, Any],
     has_influencer_image: bool = False,
+    visual_mode: str = "product_only",
 ) -> str:
     """Convert a validated script document using the Colab prompt verbatim."""
     visibility_prompt = INFLUENCER_VISIBILITY_PROMPT if has_influencer_image else ""
-    return convert_dict_to_formatted_text(script) + "\n\n" + VIDEO_CONDITION_PROMPT + visibility_prompt
+    generated_model_prompt = (
+        GENERATED_MODEL_PROMPT if visual_mode == "generated_model" else ""
+    )
+    return (
+        convert_dict_to_formatted_text(script)
+        + "\n\n"
+        + VIDEO_CONDITION_PROMPT
+        + visibility_prompt
+        + generated_model_prompt
+    )
 
 
 def convert_dict_to_formatted_text(data: Mapping[str, Any] | str) -> str:
@@ -161,7 +192,7 @@ class OpenRouterVideoClient:
         max_poll_attempts: int = 72,
         supported_durations: tuple[int, ...] = DEFAULT_SUPPORTED_DURATIONS,
         supported_aspect_ratios: tuple[str, ...] = ("9:16",),
-        supported_resolutions: tuple[str, ...] = ("480p", "720p"),
+        supported_resolutions: tuple[str, ...] = ("480p", "720p", "1080p", "4K"),
         opener: Callable[..., Any] = urlopen,
         sleeper: Callable[[float], None] = time.sleep,
         image_dimensions_reader: Callable[[str], tuple[int, int]] = read_image_dimensions,
@@ -187,8 +218,15 @@ class OpenRouterVideoClient:
 
     @classmethod
     def from_env(cls) -> "OpenRouterVideoClient":
+        from app.core.config import settings as app_settings
+
         return cls(
-            api_key=os.getenv("OPENROUTER_VIDEO_API_KEY", ""),
+            api_key=(
+                os.getenv("OPENROUTER_VIDEO_API_KEY")
+                or os.getenv("OPENROUTER_API_KEY")
+                or app_settings.OPENROUTER_API_KEY
+                or ""
+            ),
             model=os.getenv("OPENROUTER_VIDEO_MODEL") or DEFAULT_VIDEO_MODEL,
             api_url=os.getenv("OPENROUTER_VIDEO_API_URL") or DEFAULT_VIDEO_API_URL,
             image_format_reader=read_image_format,
@@ -204,7 +242,7 @@ class OpenRouterVideoClient:
     def generate_video(self, request: VideoGenerationRequest) -> VideoGenerationResult:
         if not self.api_key:
             raise OpenRouterConfigurationError(
-                "OPENROUTER_VIDEO_API_KEY가 설정되지 않았습니다."
+                "OPENROUTER_VIDEO_API_KEY 또는 OPENROUTER_API_KEY가 설정되지 않았습니다."
             )
         if request.aspect_ratio not in self.supported_aspect_ratios:
             raise VideoGenerationError(
@@ -218,10 +256,29 @@ class OpenRouterVideoClient:
             )
         if not request.image_url:
             raise VideoGenerationError("영상 생성에는 상품 이미지 URL이 필요합니다.")
+        influencer_image_urls = request.influencer_image_urls or (
+            (request.influencer_image_url,) if request.influencer_image_url else ()
+        )
+        if request.visual_mode not in {
+            "product_only",
+            "model_included",
+            "generated_model",
+        }:
+            raise VideoGenerationError(
+                f"지원하지 않는 visual_mode입니다: {request.visual_mode}"
+            )
+        if request.visual_mode == "generated_model" and influencer_image_urls:
+            raise VideoGenerationError(
+                "generated_model 모드에는 인물 reference를 함께 보낼 수 없습니다."
+            )
         try:
+            influencer_image_urls = validate_normalized_influencer_references(
+                influencer_image_urls,
+                dimensions_reader=self.image_dimensions_reader,
+            )
             valid_detail_image_urls = validate_image_inputs(
                 image_url=request.image_url,
-                influencer_image_url=request.influencer_image_url,
+                influencer_image_urls=influencer_image_urls,
                 detail_image_urls=request.detail_image_urls,
                 dimensions_reader=self.image_dimensions_reader,
                 format_reader=self.image_format_reader,
@@ -236,38 +293,43 @@ class OpenRouterVideoClient:
                 f"지원 길이: {supported}초"
             )
 
+        output_dimensions = _video_output_dimensions_payload(
+            request.resolution,
+            request.aspect_ratio,
+        )
         submit_payload = {
             "model": self.model,
             "prompt": build_video_prompt(
                 request.script,
-                has_influencer_image=bool(request.influencer_image_url),
+                has_influencer_image=bool(influencer_image_urls),
+                visual_mode=request.visual_mode,
             ),
             "duration": duration_seconds,
-            "resolution": request.resolution,
-            "aspect_ratio": request.aspect_ratio,
             "generate_audio": request.generate_audio,
+            **output_dimensions,
         }
-        if request.influencer_image_url:
-            submit_payload["input_references"] = [
-                self._image_reference(request.influencer_image_url),
-                self._image_reference(request.image_url),
-                *(
-                    self._image_reference(image_url)
-                    for image_url in valid_detail_image_urls[:1]
-                ),
-            ]
-        else:
-            submit_payload.update(_video_image_payload(self.model, request.image_url))
+        submit_payload.update(
+            _video_image_payload(
+                self.model,
+                request.image_url,
+                influencer_image_urls=influencer_image_urls,
+                detail_image_urls=valid_detail_image_urls,
+                generated_model=request.visual_mode == "generated_model",
+            )
+        )
 
-        diagnostics = _video_request_diagnostics(submit_payload)
+        diagnostics = _video_request_diagnostics(
+            submit_payload, influencer_count=len(influencer_image_urls)
+        )
         logger.warning(
             "video generation request: model=%s duration=%ss resolution=%s "
-            "aspect_ratio=%s reference_count=%s reference_order=%s "
+            "aspect_ratio=%s size=%s reference_count=%s reference_order=%s "
             "reference_domains=%s",
             self.model,
             duration_seconds,
             request.resolution,
             request.aspect_ratio,
+            output_dimensions.get("size") or "resolution+aspect",
             diagnostics["reference_count"],
             diagnostics["reference_order"],
             diagnostics["reference_domains"],
@@ -287,12 +349,13 @@ class OpenRouterVideoClient:
         started_at = time.monotonic()
         logger.info(
             "video generation submitted: job_id=%s model=%s duration=%ss "
-            "resolution=%s aspect_ratio=%s",
+            "resolution=%s aspect_ratio=%s size=%s",
             job_id,
             self.model,
             duration_seconds,
             request.resolution,
             request.aspect_ratio,
+            output_dimensions.get("size") or "resolution+aspect",
         )
 
         for attempt in range(self.max_poll_attempts):
@@ -440,32 +503,98 @@ def _video_failure_message(result: Mapping[str, Any], status: str) -> str:
     return message[:500] or status
 
 
-def _video_image_payload(model: str, image_url: str) -> dict[str, list[dict[str, Any]]]:
-    """Build the single-image input shape supported by the selected video model."""
+def _video_output_dimensions_payload(
+    resolution: str,
+    aspect_ratio: str,
+) -> dict[str, str]:
+    """Prefer a catalog-confirmed exact canvas, with a compatible fallback."""
+    exact_size = EXACT_VIDEO_SIZE_BY_RESOLUTION_AND_ASPECT_RATIO.get(
+        (resolution, aspect_ratio)
+    )
+    if exact_size:
+        return {"size": exact_size}
+    return {
+        "resolution": resolution,
+        "aspect_ratio": aspect_ratio,
+    }
+
+
+def _video_image_payload(
+    model: str,
+    image_url: str,
+    *,
+    influencer_image_urls: tuple[str, ...] = (),
+    detail_image_urls: tuple[str, ...] = (),
+    generated_model: bool = False,
+) -> dict[str, list[dict[str, Any]]]:
+    """Build only reference shapes known to be supported by each model family."""
     image = {
         "type": "image_url",
         "image_url": {"url": image_url},
     }
     if model.startswith("google/veo-"):
+        if influencer_image_urls:
+            raise VideoGenerationError(
+                "선택한 Veo 모델에는 인물 identity reference와 상품 frame을 함께 "
+                "전달하지 않습니다. Seedance 2.0을 선택하거나 인물 레퍼런스를 제거하세요."
+            )
         return {
             "frame_images": [{**image, "frame_type": "first_frame"}],
         }
-    return {"input_references": [image]}
+    if model.startswith("alibaba/wan-"):
+        if influencer_image_urls:
+            raise VideoGenerationError(
+                "선택한 Wan 모델은 이 파이프라인의 다중 identity reference 계약을 "
+                "지원하지 않습니다. Seedance 2.0을 선택하세요."
+            )
+        return {"frame_images": [{**image, "frame_type": "first_frame"}]}
+    if model.startswith("openai/sora-"):
+        raise VideoGenerationError(
+            "선택한 Sora 모델은 현재 파이프라인의 상품 이미지 reference 입력을 "
+            "지원하지 않습니다."
+        )
+
+    if (
+        not influencer_image_urls
+        and not generated_model
+        and model.startswith("bytedance/seedance-")
+    ):
+        return {"frame_images": [{**image, "frame_type": "first_frame"}]}
+
+    references = [
+        *(
+            {
+                "type": "image_url",
+                "image_url": {"url": influencer_url},
+            }
+            for influencer_url in influencer_image_urls[:2]
+        ),
+        image,
+        *(
+            {
+                "type": "image_url",
+                "image_url": {"url": detail_url},
+            }
+            for detail_url in detail_image_urls[: max(0, 2 - len(influencer_image_urls))]
+        ),
+    ]
+    return {"input_references": references}
 
 
-def _video_request_diagnostics(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _video_request_diagnostics(
+    payload: Mapping[str, Any], *, influencer_count: int = 0
+) -> dict[str, Any]:
     """Summarize image inputs without logging credentials or full URLs."""
     if "frame_images" in payload:
         references = payload.get("frame_images") or []
         reference_order = ["product"] * len(references)
     else:
         references = payload.get("input_references") or []
-        if len(references) >= 2:
-            reference_order = ["influencer", "product"] + [
-                "detail"
-            ] * (len(references) - 2)
-        else:
-            reference_order = ["product"] * len(references)
+        reference_order = (
+            ["influencer"] * min(influencer_count, len(references))
+            + (["product"] if len(references) > influencer_count else [])
+        )
+        reference_order += ["detail"] * (len(references) - len(reference_order))
 
     domains = []
     for reference in references:

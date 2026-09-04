@@ -123,7 +123,7 @@ class SettingsServiceTests(unittest.TestCase):
             InMemorySettingsRepository(), encryption_key=SettingsService.test_key()
         ).get_public()
 
-        self.assertEqual(public.video_min_resolution, "720p")
+        self.assertEqual(public.video_min_resolution, "1080p")
         self.assertEqual(public.video_max_resolution, "1080p")
         self.assertEqual(public.video_max_duration_seconds, 15)
         self.assertEqual(public.script_generation_retries, 4)
@@ -395,7 +395,7 @@ class DatabaseLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     "FROM global_settings WHERE id = 1"
                 )
             ).one()
-        self.assertEqual(tuple(row), ("720p", "720p", 4, 2, 3))
+            self.assertEqual(tuple(row), ("720p", "720p", 4, 2, 3))
 
 
 class SettingsHttpTests(unittest.TestCase):

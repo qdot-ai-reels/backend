@@ -63,7 +63,12 @@ def _get_openrouter_script_api_key_for_catalog() -> str:
     from app.core.config import settings
     from app.db import SQLAlchemySettingsRepository, SessionLocal
 
-    environment_api_key = os.getenv("OPENROUTER_SCRIPT_API_KEY", "")
+    environment_api_key = (
+        os.getenv("OPENROUTER_SCRIPT_API_KEY")
+        or os.getenv("OPENROUTER_API_KEY")
+        or settings.OPENROUTER_API_KEY
+        or ""
+    )
     if not settings.SETTINGS_ENCRYPTION_KEY:
         return environment_api_key
 
@@ -85,7 +90,12 @@ def get_openrouter_tts_catalog() -> OpenRouterTTSCatalogClient:
     from app.core.config import settings
     from app.db import SQLAlchemySettingsRepository, SessionLocal
 
-    environment_api_key = os.getenv("OPENROUTER_TTS_API_KEY", "")
+    environment_api_key = (
+        os.getenv("OPENROUTER_TTS_API_KEY")
+        or os.getenv("OPENROUTER_API_KEY")
+        or settings.OPENROUTER_API_KEY
+        or ""
+    )
     if not settings.SETTINGS_ENCRYPTION_KEY:
         return OpenRouterTTSCatalogClient(environment_api_key)
 
@@ -102,7 +112,12 @@ def get_openrouter_tts_catalog() -> OpenRouterTTSCatalogClient:
 def get_openrouter_video_catalog() -> OpenRouterVideoCatalogClient:
     from app.core.config import settings
 
-    api_key = os.getenv("OPENROUTER_VIDEO_API_KEY", "")
+    api_key = (
+        os.getenv("OPENROUTER_VIDEO_API_KEY")
+        or os.getenv("OPENROUTER_API_KEY")
+        or settings.OPENROUTER_API_KEY
+        or ""
+    )
     if settings.SETTINGS_ENCRYPTION_KEY:
         from app.db import SQLAlchemySettingsRepository, SessionLocal
 

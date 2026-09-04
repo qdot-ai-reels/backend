@@ -12,6 +12,7 @@ from app.video_generator import (
 from app.video_validation_pipeline import (
     PipelineStatus,
     PublishedVideoArtifact,
+    SquareOutputStrategy,
     VideoValidationPipeline,
     VideoValidationPipelineError,
 )
@@ -43,6 +44,202 @@ SCRIPT = {
 
 
 class VideoValidationPipelineTests(unittest.TestCase):
+    def test_center_crops_audited_square_source_without_another_paid_attempt(self):
+        attempts = []
+        normalized = []
+        published = []
+
+        def read_metadata(path):
+            if str(path).endswith("normalized.mp4"):
+                return VideoMetadata(
+                    1080, 1920, 8.0, fps=30.0, codec="h264",
+                    bitrate=8_000_000, black_frame_ratio=0.0,
+                )
+            return VideoMetadata(
+                1440, 1440, 8.0, fps=30.0, codec="h264",
+                bitrate=8_000_000, black_frame_ratio=0.0,
+            )
+
+        def normalize_video(source, destination, metadata):
+            normalized.append((source, destination, metadata))
+            Path(destination).write_bytes(b"normalized")
+
+        def publish_video(path, _generated):
+            published.append(Path(path).name)
+            return PublishedVideoArtifact(
+                storage_path=str(path),
+                playback_url="/video/file",
+                download_url="/video/file?download=true",
+            )
+
+        pipeline = VideoValidationPipeline(
+            generate_video=lambda _request, attempt: (
+                attempts.append(attempt)
+                or VideoGenerationResult(
+                    job_id="job-1",
+                    status="completed",
+                    video_url="https://example.com/square.mp4",
+                    cost=1.0,
+                )
+            ),
+            download_video=lambda _url, destination: Path(destination).write_bytes(b"video"),
+            read_metadata=read_metadata,
+            normalize_video=normalize_video,
+            publish_video=publish_video,
+            max_retries=2,
+            production_mode=True,
+            square_output_strategy=SquareOutputStrategy.CENTER_CROP,
+        )
+
+        result = pipeline.run(
+            VideoGenerationRequest(SCRIPT, "https://example.com/product.jpg")
+        )
+
+        self.assertEqual(result.status, PipelineStatus.COMPLETED)
+        self.assertEqual(attempts, [1])
+        self.assertEqual(len(normalized), 1)
+        self.assertEqual(published, ["normalized.mp4"])
+        self.assertTrue(result.source_normalized)
+        self.assertEqual(result.normalization_strategy, "center_crop")
+        self.assertEqual((result.source_metadata.width, result.source_metadata.height), (1440, 1440))
+        self.assertEqual((result.normalized_metadata.width, result.normalized_metadata.height), (1080, 1920))
+        self.assertIn("aspect_ratio", result.provider_validation.errors)
+        self.assertIn("resolution", result.provider_validation.errors)
+        self.assertEqual(result.validation.errors, [])
+
+    def test_center_crop_strategy_refuses_low_resolution_and_wide_sources(self):
+        for width, height in ((1079, 1079), (1920, 1080)):
+            with self.subTest(width=width, height=height):
+                attempts = []
+                normalized = []
+                pipeline = VideoValidationPipeline(
+                    generate_video=lambda _request, attempt: (
+                        attempts.append(attempt)
+                        or VideoGenerationResult(
+                            job_id="job-1",
+                            status="completed",
+                            video_url="https://example.com/video.mp4",
+                            cost=1.0,
+                        )
+                    ),
+                    download_video=lambda _url, destination: Path(destination).write_bytes(b"video"),
+                    read_metadata=lambda _path: VideoMetadata(
+                        width, height, 8.0, fps=30.0, codec="h264",
+                        bitrate=8_000_000, black_frame_ratio=0.0,
+                    ),
+                    normalize_video=lambda *_args: normalized.append(True),
+                    max_retries=2,
+                    production_mode=True,
+                    square_output_strategy="center_crop",
+                )
+
+                result = pipeline.run(
+                    VideoGenerationRequest(SCRIPT, "https://example.com/product.jpg")
+                )
+
+                self.assertEqual(result.status, PipelineStatus.RETRY_EXHAUSTED)
+                self.assertEqual(attempts, [1])
+                self.assertEqual(normalized, [])
+                self.assertFalse(result.source_normalized)
+                self.assertIn("aspect_ratio", result.validation.errors)
+
+    def test_production_square_output_is_rejected_without_explicit_opt_in(self):
+        normalized = []
+        pipeline = VideoValidationPipeline(
+            generate_video=lambda _request, _attempt: VideoGenerationResult(
+                job_id="job-1",
+                status="completed",
+                video_url="https://example.com/square.mp4",
+            ),
+            download_video=lambda _url, destination: Path(destination).write_bytes(b"video"),
+            read_metadata=lambda _path: VideoMetadata(
+                1440, 1440, 8.0, fps=30.0, codec="h264",
+                bitrate=8_000_000, black_frame_ratio=0.0,
+            ),
+            normalize_video=lambda *_args: normalized.append(True),
+            max_retries=0,
+            production_mode=True,
+        )
+
+        result = pipeline.run(
+            VideoGenerationRequest(SCRIPT, "https://example.com/product.jpg")
+        )
+
+        self.assertEqual(result.status, PipelineStatus.RETRY_EXHAUSTED)
+        self.assertEqual(normalized, [])
+        self.assertFalse(result.source_normalized)
+
+    def test_center_crop_strategy_leaves_valid_vertical_source_untouched(self):
+        normalized = []
+        pipeline = VideoValidationPipeline(
+            generate_video=lambda _request, _attempt: VideoGenerationResult(
+                job_id="job-1",
+                status="completed",
+                video_url="https://example.com/vertical.mp4",
+            ),
+            download_video=lambda _url, destination: Path(destination).write_bytes(b"video"),
+            read_metadata=lambda _path: VideoMetadata(
+                1080, 1920, 8.0, fps=30.0, codec="h264",
+                bitrate=8_000_000, black_frame_ratio=0.0,
+            ),
+            normalize_video=lambda *_args: normalized.append(True),
+            max_retries=0,
+            production_mode=True,
+            square_output_strategy="center_crop",
+        )
+
+        result = pipeline.run(
+            VideoGenerationRequest(SCRIPT, "https://example.com/product.jpg")
+        )
+
+        self.assertEqual(result.status, PipelineStatus.COMPLETED)
+        self.assertEqual(normalized, [])
+        self.assertFalse(result.source_normalized)
+
+    def test_failed_normalized_artifact_never_submits_another_paid_attempt(self):
+        attempts = []
+        published = []
+
+        def read_metadata(path):
+            if str(path).endswith("normalized.mp4"):
+                return VideoMetadata(
+                    1080, 1920, 8.0, fps=30.0, codec="h264",
+                    bitrate=1_000_000, black_frame_ratio=0.0,
+                )
+            return VideoMetadata(
+                1440, 1440, 8.0, fps=30.0, codec="h264",
+                bitrate=8_000_000, black_frame_ratio=0.0,
+            )
+
+        pipeline = VideoValidationPipeline(
+            generate_video=lambda _request, attempt: (
+                attempts.append(attempt)
+                or VideoGenerationResult(
+                    job_id="job-1",
+                    status="completed",
+                    video_url="https://example.com/square.mp4",
+                    cost=1.0,
+                )
+            ),
+            download_video=lambda _url, destination: Path(destination).write_bytes(b"video"),
+            read_metadata=read_metadata,
+            normalize_video=lambda _source, destination, _metadata: Path(destination).write_bytes(b"normalized"),
+            publish_video=lambda *_args: published.append(True),
+            max_retries=2,
+            production_mode=True,
+            square_output_strategy="center_crop",
+        )
+
+        result = pipeline.run(
+            VideoGenerationRequest(SCRIPT, "https://example.com/product.jpg")
+        )
+
+        self.assertEqual(result.status, PipelineStatus.RETRY_EXHAUSTED)
+        self.assertEqual(attempts, [1])
+        self.assertEqual(published, [])
+        self.assertTrue(result.source_normalized)
+        self.assertIn("bitrate", result.validation.errors)
+
     def test_logs_metadata_and_validation_errors(self):
         pipeline = VideoValidationPipeline(
             generate_video=lambda _request, _attempt: VideoGenerationResult(
@@ -66,6 +263,10 @@ class VideoValidationPipelineTests(unittest.TestCase):
             "width": 480,
             "height": 854,
             "duration_seconds": 7.0,
+            "fps": None,
+            "codec": None,
+            "bitrate": None,
+            "black_frame_ratio": None,
         })
         self.assertIn("duration", log_message[6])
 

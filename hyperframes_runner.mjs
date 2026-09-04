@@ -57,7 +57,7 @@ async function readBody(request) {
 
 const server = http.createServer(async (request, response) => {
   if (request.method === "GET" && request.url === "/health") {
-    sendJson(response, 200, { status: "healthy", version: "0.8.12" });
+    sendJson(response, 200, { status: "healthy", version: "0.8.27" });
     return;
   }
 
@@ -85,8 +85,18 @@ const server = http.createServer(async (request, response) => {
     }
 
     const jobId = randomUUID();
-    await runHyperFrames("check", ["check", projectPath, "--json"]);
-    await runHyperFrames("render", ["render", projectPath, "--output", outputPath, "--quality", "draft", "--workers", "1"]);
+    await runHyperFrames("check", ["check", projectPath, "--json", "--strict"]);
+    const quality = String(process.env.HYPERFRAMES_RENDER_QUALITY || "high");
+    const bitrate = String(process.env.HYPERFRAMES_VIDEO_BITRATE || "10M");
+    await runHyperFrames("render", [
+      "render", projectPath,
+      "--output", outputPath,
+      "--quality", quality,
+      "--video-bitrate", bitrate,
+      "--fps", "30",
+      "--strict",
+      "--workers", "1",
+    ]);
     sendJson(response, 200, {
       job_id: jobId,
       status: "completed",

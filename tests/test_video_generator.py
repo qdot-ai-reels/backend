@@ -239,13 +239,51 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertEqual(len(opener.requests), 3)
         request_body = json.loads(opener.requests[0].data)
         self.assertEqual(request_body["duration"], 8)
+        self.assertEqual(request_body["resolution"], "720p")
         self.assertEqual(request_body["aspect_ratio"], "9:16")
+        self.assertNotIn("size", request_body)
         self.assertFalse(request_body["generate_audio"])
         self.assertEqual(
-            request_body["input_references"][0]["image_url"]["url"],
+            request_body["frame_images"][0]["image_url"]["url"],
             "https://example.com/product.jpg",
         )
-        self.assertNotIn("frame_images", request_body)
+        self.assertEqual(request_body["frame_images"][0]["frame_type"], "first_frame")
+        self.assertNotIn("input_references", request_body)
+
+    def test_submits_exact_portrait_size_for_production_1080p_request(self):
+        opener = SequentialOpener([
+            {"id": "job-1", "polling_url": "https://example.com/poll/job-1"},
+            {
+                "id": "job-1",
+                "status": "completed",
+                "unsigned_urls": ["https://example.com/video.mp4"],
+            },
+        ])
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            model="bytedance/seedance-2.0",
+            opener=opener,
+            sleeper=lambda _seconds: None,
+            image_dimensions_reader=self.image_dimensions_reader,
+        )
+
+        client.generate_video(
+            VideoGenerationRequest(
+                script=SCRIPT,
+                image_url="https://example.com/product.jpg",
+                resolution="1080p",
+                aspect_ratio="9:16",
+            )
+        )
+
+        request_body = json.loads(opener.requests[0].data)
+        self.assertEqual(request_body["size"], "1080x1920")
+        self.assertNotIn("resolution", request_body)
+        self.assertNotIn("aspect_ratio", request_body)
+        self.assertEqual(
+            request_body["frame_images"][0]["frame_type"],
+            "first_frame",
+        )
 
     def test_uses_frame_image_for_veo_model(self):
         opener = SequentialOpener([
@@ -316,6 +354,36 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertIn("slight handheld motion", prompt)
         self.assertIn("Do not intentionally show product text in a readable close-up", prompt)
 
+    def test_generated_model_uses_product_reference_and_text_created_presenter(self):
+        opener = SequentialOpener([
+            {"id": "job-1", "polling_url": "https://example.com/poll/job-1"},
+            {
+                "id": "job-1",
+                "status": "completed",
+                "unsigned_urls": ["https://example.com/video.mp4"],
+            },
+        ])
+        client = OpenRouterVideoClient(
+            api_key="test-key",
+            opener=opener,
+            sleeper=lambda _seconds: None,
+            image_dimensions_reader=self.image_dimensions_reader,
+        )
+
+        client.generate_video(
+            VideoGenerationRequest(
+                script=SCRIPT,
+                image_url="https://example.com/product.jpg",
+                visual_mode="generated_model",
+            )
+        )
+
+        request_body = json.loads(opener.requests[0].data)
+        self.assertIn("input_references", request_body)
+        self.assertNotIn("frame_images", request_body)
+        self.assertIn("fully synthetic adult Korean woman", request_body["prompt"])
+        self.assertIn("product identity reference", request_body["prompt"])
+
     def test_submits_first_valid_product_detail_image_after_influencer_and_main_image(self):
         opener = SequentialOpener([
             {"id": "job-1", "polling_url": "https://example.com/poll/job-1"},
@@ -358,7 +426,7 @@ class VideoGeneratorTests(unittest.TestCase):
         ])
         client = OpenRouterVideoClient(
             api_key="secret-key",
-            model="alibaba/wan-3.0",
+            model="bytedance/seedance-2.0",
             opener=opener,
             sleeper=lambda _seconds: None,
             image_dimensions_reader=self.image_dimensions_reader,
@@ -376,7 +444,7 @@ class VideoGeneratorTests(unittest.TestCase):
 
         logs = "\n".join(captured.output)
         self.assertIn("video generation request:", logs)
-        self.assertIn("model=alibaba/wan-3.0", logs)
+        self.assertIn("model=bytedance/seedance-2.0", logs)
         self.assertIn("reference_count=3", logs)
         self.assertIn("reference_order=influencer,product,detail", logs)
         self.assertIn("reference_domains=images.example,shop.example,cdn.example", logs)

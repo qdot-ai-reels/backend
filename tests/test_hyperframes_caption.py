@@ -49,7 +49,7 @@ class HyperFramesCaptionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_transcript({"scenes": []})
 
-    def test_build_transcript_skips_empty_and_null_subtitles(self) -> None:
+    def test_build_transcript_populates_empty_subtitles_with_safe_text(self) -> None:
         script = {
             "meta": {
                 "output_format_version": "1.0",
@@ -91,7 +91,11 @@ class HyperFramesCaptionTests(unittest.TestCase):
 
         self.assertEqual(
             build_transcript(script),
-            [{"id": "w0", "text": "지금 확인", "start": 5.0, "end": 8.0}],
+            [
+                {"id": "w0", "text": "상품 소개", "start": 0.0, "end": 2.0},
+                {"id": "w1", "text": "상품 소개", "start": 2.0, "end": 5.0},
+                {"id": "w2", "text": "지금 확인", "start": 5.0, "end": 8.0},
+            ],
         )
 
     def test_build_transcript_normalizes_escaped_line_breaks(self) -> None:
@@ -144,6 +148,10 @@ class HyperFramesCaptionTests(unittest.TestCase):
         self.assertIn('data-height="1920"', html)
         self.assertIn('data-fps="30"', html)
         self.assertIn('data-duration="8.0"', html)
+        self.assertIn('#root { position: relative; width: 1080px; height: 1920px;', html)
+        self.assertIn('{ scale: 1 }', html)
+        self.assertIn('scale: 1.01', html)
+        self.assertIn('duration: 8.0, ease: "none"', html)
         self.assertIn('data-start="0.0" data-duration="3.0"', html)
         self.assertIn("첫 장면 &lt;확인&gt;", html)
         self.assertNotIn("첫 장면 <확인>", html)
