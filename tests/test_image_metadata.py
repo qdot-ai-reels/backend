@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from app.image_metadata import (
+    MAX_REMOTE_IMAGE_BYTES,
     validate_image_inputs,
     validate_normalized_influencer_references,
     validate_remote_image_url,
@@ -89,6 +90,19 @@ class ImageMetadataTests(unittest.TestCase):
 
         self.assertEqual(result, ("https://example.com/valid-detail.jpg",))
 
+    def test_rejected_detail_image_log_does_not_expose_url_credentials(self):
+        sensitive_url = "https://catalog-user:top-secret@example.com/detail.jpg?token=also-secret"
+
+        with self.assertLogs("app.image_metadata", level="WARNING") as captured:
+            result = validate_image_inputs(detail_image_urls=(sensitive_url,))
+
+        message = "\n".join(captured.output)
+        self.assertEqual(result, ())
+        self.assertIn("host=example.com", message)
+        self.assertNotIn("catalog-user", message)
+        self.assertNotIn("top-secret", message)
+        self.assertNotIn("also-secret", message)
+
     def test_still_rejects_invalid_required_image(self):
         def read_dimensions(url):
             if url.endswith("product.jpg"):
@@ -122,6 +136,15 @@ class ImageMetadataTests(unittest.TestCase):
                 dimensions_reader=lambda _url: (800, 1200),
                 format_reader=lambda _url: "gif",
             )
+
+    def test_production_policy_rejects_bmp_and_limits_remote_assets_to_15_mib(self):
+        with self.assertRaisesRegex(ValueError, "bmp.*지원되지 않습니다"):
+            validate_image_inputs(
+                image_url="https://example.com/product.bmp",
+                dimensions_reader=lambda _url: (800, 1200),
+                format_reader=lambda _url: "bmp",
+            )
+        self.assertEqual(MAX_REMOTE_IMAGE_BYTES, 15 * 1024 * 1024)
 
 
 if __name__ == "__main__":

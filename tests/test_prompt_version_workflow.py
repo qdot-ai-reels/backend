@@ -85,6 +85,20 @@ class PromptVersionWorkflowTests(unittest.TestCase):
             patch("app.prompt_versions.SessionLocal", self.session_local),
             patch("app.generation_quotes.SessionLocal", self.session_local),
             patch("app.generation_jobs.SessionLocal", self.session_local),
+            patch("app.generation_jobs.require_active_product_revision"),
+            patch(
+                "app.api.v1.final_generation.resolve_active_generation_product",
+                side_effect=lambda product, image_url, revision: {
+                    "product": {
+                        **product,
+                        "product_id": "catalog-product-1",
+                        "catalog_revision": revision,
+                    },
+                    "image_url": image_url or "https://example.com/product.jpg",
+                    "square_output_strategy": "reject",
+                    "revision": revision,
+                },
+            ),
         ]
         for patcher in self.patchers:
             patcher.start()
@@ -139,6 +153,7 @@ class PromptVersionWorkflowTests(unittest.TestCase):
             "product": {"name": "상품"},
             "image_url": "https://example.com/product.jpg",
             "template_id": "ugc_full_15",
+            "product_catalog_revision": 1,
             "template_version": 1,
             "quote_id": quote_id,
             "prompt_version_id": prompt_version_id,

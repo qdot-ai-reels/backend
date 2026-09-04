@@ -233,13 +233,59 @@ Content-Type: application/json
 
 이 direct `/video` 경로는 DB 설정이 없으면 검증 실패 시 2회 자동 재시도하므로 최초 요청을 포함해
 최대 3개의 유료 provider 생성이 발생할 수 있습니다. Studio의 `/generate` 경로는 후보별 자동
-유료 재시도를 0으로 고정하고 명시적인 retry 요청만 허용합니다.
+유료 재시도를 0으로 고정합니다. 후보 retry도 기존 견적에 비용 포함과 허용 횟수가 명시된 경우만
+실행되며, 현재 일반 생성 견적은 `candidate_retry_policy`를 0/비포함으로 반환합니다.
+
+## 광고 상품 카탈로그
+
+Studio의 템플릿 생성은 서버 카탈로그에서 활성 상태로 검수된 상품만 사용합니다.
+새 상품은 항상 비활성 상태로 등록되며, 원격 이미지의 HTTPS·공개 IP·형식·크기·
+해상도 검증이 끝난 뒤에도 운영자가 상품 의미와 표시 내용의 일치를 별도로 확인해야
+활성화할 수 있습니다.
+
+현재 상품 API 자체에는 운영자 인증이 없습니다. 공개 production 전에는 인증 reverse
+proxy 또는 서버 권한 계층에서 아래 등록·수정·활성화·비활성화·보관 mutation에 상품
+operator RBAC를 강제해야 합니다. UI에서 관리 메뉴를 숨기는 것은 권한 통제가 아닙니다.
+
+```text
+GET    /api/v1/reels/products?include_inactive=true
+POST   /api/v1/reels/products
+PUT    /api/v1/reels/products/{product_id}
+POST   /api/v1/reels/products/{product_id}/activate
+POST   /api/v1/reels/products/{product_id}/deactivate
+DELETE /api/v1/reels/products/{product_id}?expected_revision={revision}
+```
+
+등록은 `name`, `image_url`이 필수이고 `product_id`는 생략하면 생성됩니다. 수정과
+상태 변경에는 목록에서 받은 `expected_revision`이 필요합니다. 수정된 상품은 자동
+비활성화되며, 활성화 요청은 다음처럼 명시적 검수 확인과 메모를 남깁니다.
+
+```json
+{
+  "expected_revision": 2,
+  "asset_review_acknowledged": true,
+  "review_note": "대표 상품, 옵션, 라벨과 이미지가 일치함을 확인"
+}
+```
+
+`DELETE`는 DB 행을 제거하지 않고 보관 처리합니다. 이미 보관된 상품에 같은 요청을 다시
+보내면 stale `expected_revision`이어도 멱등 성공으로 현재 상품을 HTTP 200 반환합니다. 그 밖의
+stale mutation은 `PRODUCT_REVISION_CONFLICT` 409를 반환합니다. 활성화 API로 재검수 후 복구할
+수 있으며 기존 생성 작업은 요청 당시 상품 snapshot을 계속 보존합니다.
 
 ## Production 후보 생성 API
 
 `POST /api/v1/reels/generate`는 `candidate_count` 1~4(생략 시 기본 1)를 받아 narration을
-한 번 만든 뒤 후보를 각각 생성합니다. 자동 유료 재시도는 하지 않으며 실패한
-후보는 명시적인 retry API로만 다시 생성합니다.
+한 번 만든 뒤 후보를 각각 생성합니다. 자동 유료 재시도는 하지 않습니다. 실패한
+후보의 retry API는 상품 상태와 견적의 유료 재시도 허용량을 다시 확인합니다.
+
+Studio의 `template_id` 생성 요청은 상품 목록 응답의 `raw_product`, `image_url`,
+`revision`을 각각 `product`, `image_url`, `product_catalog_revision`으로 전송해야
+합니다. 서버는 활성/보관 상태와 revision을 다시 확인하고 카탈로그의 정본 데이터로
+prompt 입력을 구성합니다. 요청을 `ACCEPTED`로 저장하는 같은 트랜잭션에서도 상품 행을
+잠그고 active/revision CAS를 반복합니다. 변경된 상품은 `PRODUCT_CATALOG_CHANGED`, 비활성 또는
+보관 상품은 `PRODUCT_UNAVAILABLE` 409 응답으로 생성 전에 차단됩니다. 기존 script를
+직접 제공하는 저수준 호출은 호환성을 위해 카탈로그 적용 대상에서 제외됩니다.
 
 ```json
 {
@@ -277,6 +323,14 @@ Content-Type: application/json
 - 후보 파일: `GET /api/v1/reels/generate/{job_id}/candidates/{candidate_id}/file`
 - 후보 재시도: `POST /api/v1/reels/generate/{job_id}/candidates/{candidate_id}/retry`
 
+Studio 후보 재시도는 기존 견적의 `candidate_retry_policy.cost_included_in_total=true`와
+양수 `authorized_paid_retries`가 모두 필요합니다. 허용 횟수는 모든 후보 합계로 원자적으로
+차감하며, 현재 기본 견적처럼 비용이 포함되지 않은 경우
+`PAID_RETRY_QUOTE_REQUIRED` 409를 반환합니다. 재시도 예약과 worker의 유료 provider 호출
+직전에도 상품 active/revision을 확인하며 각각 `PRODUCT_UNAVAILABLE` 또는
+`PRODUCT_CATALOG_CHANGED` 409/후보 오류로 종료합니다. `template_id`가 없는 기존 저수준
+작업의 retry 동작은 호환성을 위해 그대로 유지됩니다.
+
 최종 후보마다 provider 검수와 caption render 이후 최종 검수를 모두 저장합니다.
 최종 검수는 1080x1920 이상, 9:16, 24fps 이상, H.264/HEVC, 2.5Mbps 이상,
 길이 오차 0.25초 이하, black-frame 비율 3% 이하를 요구합니다.
@@ -285,13 +339,19 @@ Content-Type: application/json
 
 서버가 검사하는 모든 원격 이미지는 HTTPS와 공개 IP만 허용합니다. localhost,
 사설/link-local/reserved 주소와 안전하지 않은 redirect는 거부하고 다운로드를
-25MB로 제한합니다. 운영에서는 다음처럼 provider-fetch 가능한 CDN 호스트를
-명시적으로 제한하세요.
+15 MiB로 제한합니다. 지원 형식은 JPEG, PNG, WebP이며 카탈로그 등록 이미지는 각 변이
+512px 이상, 최대 4:1 비율이어야 합니다. 대표 이미지뿐 아니라 모든 상세 이미지가 이
+기준을 통과해야 하며 하나라도 부적합하면 등록 또는 이미지 수정 전체를 거부합니다.
+운영에서는 다음처럼 provider-fetch 가능한 CDN 호스트를 명시적으로 제한하세요.
 
 ```bash
 ALLOWED_IMAGE_HOSTS=cdn.example.com,*.trusted-cdn.example
 CORS_ORIGINS=https://reels.example.com
 ```
+
+로컬에서는 `CORS_ORIGINS=http://localhost:3000` 하나만 지정해도 같은 포트의
+`http://127.0.0.1:3000`을 함께 허용합니다. 이 보정은 loopback 호스트에만 적용되며
+운영 도메인은 설정한 origin 외로 확장하지 않습니다.
 
 ## Worker 경계
 

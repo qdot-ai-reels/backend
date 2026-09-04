@@ -86,6 +86,19 @@ class StudioWorkflowApiTests(unittest.TestCase):
             "app.api.v1.final_generation.get_active_prompt_version",
             return_value=self.prompt_snapshot,
         )
+        self.catalog_product_patcher = patch(
+            "app.api.v1.final_generation.resolve_active_generation_product",
+            side_effect=lambda product, image_url, revision: {
+                "product": {
+                    **product,
+                    "product_id": "catalog-product-1",
+                    "catalog_revision": revision,
+                },
+                "image_url": image_url or "https://example.com/product.jpg",
+                "square_output_strategy": "reject",
+                "revision": revision,
+            },
+        )
         self.quoted_prompt_patcher = patch(
             "app.api.v1.final_generation._load_quoted_prompt_snapshot",
             return_value=self.prompt_snapshot,
@@ -93,6 +106,8 @@ class StudioWorkflowApiTests(unittest.TestCase):
         self.reserve_request = self.reserve_request_patcher.start()
         self.reject_request = self.reject_request_patcher.start()
         self.active_prompt_patcher.start()
+        self.catalog_product_patcher.start()
+        self.addCleanup(self.catalog_product_patcher.stop)
         self.quoted_prompt_patcher.start()
         self.addCleanup(self.quoted_prompt_patcher.stop)
         self.addCleanup(self.active_prompt_patcher.stop)
@@ -157,6 +172,7 @@ class StudioWorkflowApiTests(unittest.TestCase):
                     "product": {"name": "상품"},
                     "image_url": "https://example.com/product.jpg",
                     "template_id": "ugc_full_15",
+                    "product_catalog_revision": 1,
                     "template_version": 1,
                     "quote_id": "quote-1",
                     "client_request_id": "one-click-1",
@@ -203,6 +219,7 @@ class StudioWorkflowApiTests(unittest.TestCase):
                     "product": {"name": "상품"},
                     "image_url": "https://example.com/product.jpg",
                     "template_id": "ugc_full_15",
+                    "product_catalog_revision": 1,
                     "quote_id": "quote-1",
                     "client_request_id": "mismatch-1",
                     "script": script,
@@ -254,6 +271,7 @@ class StudioWorkflowApiTests(unittest.TestCase):
                     "product": {"name": "상품"},
                     "image_url": "https://example.com/product.jpg",
                     "template_id": "ugc_quick_6",
+                    "product_catalog_revision": 1,
                     "quote_id": "quote-1",
                     "client_request_id": "matching-1",
                     "script": script,
@@ -284,6 +302,7 @@ class StudioWorkflowApiTests(unittest.TestCase):
             "product": {"name": "상품"},
             "image_url": "https://example.com/product.jpg",
             "template_id": "ugc_quick_4",
+            "product_catalog_revision": 1,
             "quote_id": "quote-1",
             "visual_mode": "generated_model",
             "candidate_count": 1,
@@ -366,6 +385,7 @@ class StudioWorkflowApiTests(unittest.TestCase):
             "product": {"name": "상품"},
             "image_url": "https://example.com/product.jpg",
             "template_id": "ugc_quick_4",
+            "product_catalog_revision": 1,
             "quote_id": "quote-1",
             "visual_mode": "generated_model",
             "client_request_id": "racing-request",
@@ -425,6 +445,7 @@ class StudioWorkflowApiTests(unittest.TestCase):
             "product": {"name": "상품"},
             "image_url": "https://example.com/product.jpg",
             "template_id": "ugc_quick_4",
+            "product_catalog_revision": 1,
             "quote_id": "quote-1",
             "visual_mode": "generated_model",
             "client_request_id": "racing-conflict",
@@ -478,6 +499,7 @@ class StudioWorkflowApiTests(unittest.TestCase):
             "product": {"name": "상품"},
             "image_url": "https://example.com/product.jpg",
             "template_id": "ugc_quick_4",
+            "product_catalog_revision": 1,
             "quote_id": "quote-1",
             "visual_mode": "generated_model",
             "candidate_count": 1,

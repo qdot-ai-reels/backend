@@ -1,16 +1,18 @@
 # Studio workflow API final review
 
-- Reviewed at: 2026-09-04 17:45 KST
+- Reviewed at: 2026-09-04 23:15 KST
 - Contract: `docs/studio-workflow-contract.md`
 - Stack: FastAPI, SQLAlchemy, PostgreSQL/SQLite-compatible tests
 - Test strategy: in-process API and persistence tests; paid provider submission disabled
 
 ## Verdict
 
-The local P0/P1 Studio contract is accepted after Critical/Major remediation.
-It is not approved for unauthenticated public deployment: durable execution,
-provider poll recovery, object storage, authorization, and Korean forced
-alignment remain explicit production blockers.
+The local single-process Studio contract, including the advertising-product
+catalog and its frontend workflow, is accepted after Critical/Major
+remediation. It is not approved for public production deployment: operator
+authorization, immutable owned asset ingestion, durable execution, provider
+poll recovery, object storage, and Korean forced alignment remain explicit
+production blockers.
 
 ## Acceptance checklist
 
@@ -25,9 +27,14 @@ alignment remain explicit production blockers.
 | Retry safety | PASS | Active parent and non-retryable failures return 409 |
 | Failure privacy | PASS | Public list/detail use stable messages; raw evidence remains persisted |
 | FE option recovery | PASS | Five allowlisted Studio controls are stored and returned under `options` |
+| Advertising product catalog | PASS | Inactive-first registration, explicit review activation, revision conflicts, recoverable archive, and audit history |
+| Product-to-generation integrity | PASS | Quote and submit pin the active product revision; submit and worker recheck it before paid work |
+| Paid candidate retry | PASS | Current quote authorizes zero retries and returns `PAID_RETRY_QUOTE_REQUIRED` before provider work |
+| Local loopback CORS | PASS | Configured `localhost`/`127.0.0.1` aliases interoperate without broadening non-local origins |
+| Browser workflow | PASS | `/products` add/JSON-prefill/cancel and `/create` active-product selection; no console errors or mutation |
 | Legacy artifacts | PASS | Top-level completed output normalizes to one playable `legacy-primary` item |
 | List query support | PASS | Created-time and status/created-time composite indexes created at startup |
-| Full regression | PASS | 265 tests passed in 14.862 seconds |
+| Full regression | PASS | Backend 316 tests; frontend 33 contract tests plus lint, TypeScript, and production build |
 
 ## Critical and Major findings resolved
 
@@ -47,6 +54,21 @@ alignment remain explicit production blockers.
    boundary. They normalize to an integer while fractional durations still fail.
 7. The previous default of three candidates expanded legacy spend. It is now
    one unless the caller explicitly requests more.
+8. Studio previously depended on source-controlled product fixtures. Products
+   now have an operator workflow with inactive-first saves, explicit semantic
+   review, optimistic revisions, activation audit, and recoverable archive.
+9. A product could change after quote or initial request validation. The
+   catalog revision is now pinned and rechecked inside initial job reservation,
+   retry reservation, and the worker immediately before paid provider work.
+10. A paid candidate retry was not represented by the current quote. Current
+    quotes authorize zero paid retries, and Studio rejects them with a stable
+    409 until an explicit retry quote contract exists.
+11. The documented frontend URL used `127.0.0.1` while the backend's common
+    local CORS value used `localhost`. Loopback aliases are now normalized
+    without modifying or broadening configured production origins.
+12. Rejected optional detail-image logs previously retained URL userinfo. They
+    now retain only the host label, with credentials, path, query, and fragment
+    excluded and covered by regression.
 
 ## Data and performance review
 
@@ -87,9 +109,31 @@ Full suite:
 .venv/bin/python -m unittest discover -s tests
 ```
 
-Result: 265 tests passed. The prior SQLite cross-thread connection cleanup
-traceback is gone. Existing non-failing Starlette deprecation and mocked
-`HTTPError` resource warnings remain.
+Result: 316 tests passed in 16.271 seconds. The prior SQLite cross-thread
+connection cleanup traceback is gone. Existing non-failing Starlette
+deprecation and mocked `HTTPError` resource warnings remain.
+
+Frontend gates:
+
+```bash
+npm run lint
+npx tsc --noEmit
+npm run test:contracts
+npm run build
+```
+
+Result: 33 contract tests passed; lint, TypeScript, and the Next.js production
+build passed. The route manifest includes `/products`.
+
+Local browser smoke at `http://127.0.0.1:3000`:
+
+- `/products` displayed one seeded active product and the management menu.
+- The add dialog exposed core fields, image controls, review notes, and JSON
+  prefill. Known fields populated successfully; cancel left the catalog at one
+  total/one active product.
+- `/create` selected the active product and exposed the product-management link.
+- No save, activation, archive, generation, or paid provider request occurred.
+- No visible or browser-console error remained after the loopback CORS fix.
 
 ## User review points
 
@@ -100,16 +144,25 @@ traceback is gone. Existing non-failing Starlette deprecation and mocked
   quote instead of a one-click resubmit.
 - Confirm whether legacy artifacts should remain labeled `legacy-primary` in
   the frontend or receive a localized display label.
+- Confirm the product-operator role, semantic-review ownership, and approval
+  evidence required before a catalog revision may become active.
 
 ## Remaining risks and assumptions
 
+- Product mutation APIs have no authentication, RBAC, or operator rate limit.
+  They must not be exposed on the public internet in this state.
+- Remote image checks resolve before `urllib` fetches, so DNS rebinding is not
+  eliminated by a pinned connection. The per-operation socket timeout is also
+  not a shared total request deadline across up to nine images.
+- Catalog approval currently references mutable remote URLs. Production must
+  ingest owned bytes into versioned object storage and bind activation to an
+  immutable hash/manifest rather than trusting a URL to remain unchanged.
 - FastAPI `BackgroundTasks` is not a durable worker and cannot resume after a
   process restart.
 - Provider polling URLs are not persisted, so submitted jobs cannot yet be
   reconciled automatically.
 - Narration and final media remain host-local rather than checksummed object
   storage artifacts.
-- No authentication or ownership boundary protects the management APIs yet.
 - The quote does not cover script/TTS/render/storage and does not enforce an
   account-level hard budget after provider submission.
 - Korean audio has duration fitting but no word-level forced-alignment proof.

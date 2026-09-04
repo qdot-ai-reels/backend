@@ -22,10 +22,15 @@ from app.api.v1.final_generation import (
     get_generation_status,
     resolve_influencer_image_urls,
     retry_candidate,
+    run_candidate_retry,
     router,
 )
 from fastapi import BackgroundTasks, HTTPException
 from app.generation_jobs import _error_metadata, _status_message
+from app.products import (
+    ProductCatalogInactiveError,
+    ProductCatalogRevisionConflictError,
+)
 from app.tts_generator import SceneAudioDurationError
 from app.script_generator import ScriptDialogueLengthError
 from app.settings_service import VideoModelCapabilities
@@ -399,6 +404,207 @@ class FinalGenerationApiTests(unittest.TestCase):
         self.assertEqual(task.args[-2:], (1.25, 2))
         self.assertNotIn("cost", _update_candidate.call_args.kwargs)
         self.assertNotIn("attempts", _update_candidate.call_args.kwargs)
+
+    @patch("app.api.v1.final_generation.reserve_candidate_retry")
+    @patch(
+        "app.api.v1.final_generation.get_job_payload",
+        return_value={
+            "template_id": "ugc_quick_4",
+            "product_catalog_revision": 2,
+            "product": {"product_id": "catalog-product-1"},
+            "script": {"scenes": []},
+            "quote": {
+                "quote_id": "quote-1",
+                "candidate_retry_policy": {
+                    "authorized_paid_retries": 0,
+                    "cost_included_in_total": False,
+                },
+            },
+        },
+    )
+    @patch(
+        "app.api.v1.final_generation.get_job",
+        return_value={
+            "job_id": "job-1",
+            "status": "FAILED",
+            "candidates": [
+                {
+                    "candidate_id": "candidate-01",
+                    "status": "FAILED",
+                    "retryable": True,
+                }
+            ],
+        },
+    )
+    def test_template_retry_requires_explicit_paid_quote_coverage(
+        self,
+        _get_job,
+        _get_payload,
+        reserve_retry,
+    ):
+        background = BackgroundTasks()
+        with self.assertRaises(HTTPException) as context:
+            retry_candidate("job-1", "candidate-01", background)
+
+        self.assertEqual(context.exception.status_code, 409)
+        self.assertEqual(
+            context.exception.detail["code"], "PAID_RETRY_QUOTE_REQUIRED"
+        )
+        reserve_retry.assert_not_called()
+        self.assertEqual(background.tasks, [])
+
+    @patch("app.api.v1.final_generation.run_candidate_retry")
+    @patch(
+        "app.api.v1.final_generation.reserve_candidate_retry",
+        return_value={"cost": 1.25, "attempts": 2},
+    )
+    @patch("app.api.v1.final_generation.Path.is_file", return_value=True)
+    @patch(
+        "app.api.v1.final_generation.get_job_payload",
+        return_value={
+            "template_id": "ugc_quick_4",
+            "product_catalog_revision": 2,
+            "product": {"product_id": "catalog-product-1"},
+            "script": {"scenes": []},
+            "quote": {
+                "quote_id": "quote-1",
+                "candidate_retry_policy": {
+                    "authorized_paid_retries": 1,
+                    "cost_included_in_total": True,
+                },
+            },
+        },
+    )
+    @patch(
+        "app.api.v1.final_generation.get_job",
+        return_value={
+            "job_id": "job-1",
+            "status": "FAILED",
+            "candidates": [
+                {
+                    "candidate_id": "candidate-01",
+                    "status": "FAILED",
+                    "retryable": True,
+                }
+            ],
+        },
+    )
+    def test_template_retry_atomically_reserves_catalog_and_quote_allowance(
+        self,
+        _get_job,
+        _get_payload,
+        _is_file,
+        reserve_retry,
+        _run_retry,
+    ):
+        background = BackgroundTasks()
+        result = retry_candidate("job-1", "candidate-01", background)
+
+        self.assertEqual(result["status"], "PENDING")
+        reserve_retry.assert_called_once_with(
+            "job-1",
+            "candidate-01",
+            paid_retry_limit=1,
+            catalog_product_id="catalog-product-1",
+            catalog_revision=2,
+        )
+        self.assertEqual(background.tasks[0].args[-2:], (1.25, 2))
+
+    @patch(
+        "app.api.v1.final_generation.reserve_candidate_retry",
+        side_effect=ProductCatalogRevisionConflictError("상품 변경됨"),
+    )
+    @patch("app.api.v1.final_generation.Path.is_file", return_value=True)
+    @patch(
+        "app.api.v1.final_generation.get_job_payload",
+        return_value={
+            "template_id": "ugc_quick_4",
+            "product_catalog_revision": 2,
+            "product": {"product_id": "catalog-product-1"},
+            "script": {"scenes": []},
+            "quote": {
+                "quote_id": "quote-1",
+                "candidate_retry_policy": {
+                    "authorized_paid_retries": 1,
+                    "cost_included_in_total": True,
+                },
+            },
+        },
+    )
+    @patch(
+        "app.api.v1.final_generation.get_job",
+        return_value={
+            "job_id": "job-1",
+            "status": "FAILED",
+            "candidates": [
+                {
+                    "candidate_id": "candidate-01",
+                    "status": "FAILED",
+                    "retryable": True,
+                }
+            ],
+        },
+    )
+    def test_template_retry_rejects_stale_catalog_before_queue(
+        self,
+        _get_job,
+        _get_payload,
+        _is_file,
+        _reserve_retry,
+    ):
+        background = BackgroundTasks()
+        with self.assertRaises(HTTPException) as context:
+            retry_candidate("job-1", "candidate-01", background)
+
+        self.assertEqual(context.exception.status_code, 409)
+        self.assertEqual(
+            context.exception.detail["code"], "PRODUCT_CATALOG_CHANGED"
+        )
+        self.assertEqual(background.tasks, [])
+
+    @patch("app.api.v1.final_generation._finalize_candidate_job")
+    @patch("app.api.v1.final_generation.update_candidate")
+    @patch("app.api.v1.final_generation._build_settings_service")
+    @patch("app.api.v1.final_generation._run_candidate")
+    @patch(
+        "app.api.v1.final_generation.resolve_active_generation_product",
+        side_effect=ProductCatalogInactiveError("비활성 상품"),
+    )
+    @patch("app.api.v1.final_generation.Path.is_file", return_value=True)
+    def test_template_retry_worker_rechecks_catalog_before_paid_provider(
+        self,
+        _is_file,
+        _resolve_product,
+        run_candidate,
+        build_settings,
+        update_candidate,
+        _finalize,
+    ):
+        run_candidate_retry(
+            "job-1",
+            "candidate-01",
+            {
+                "template_id": "ugc_quick_4",
+                "product_catalog_revision": 2,
+                "product": {"product_id": "catalog-product-1"},
+                "image_url": "https://example.com/product.jpg",
+                "script": {"scenes": []},
+                "quote": {
+                    "quote_id": "quote-1",
+                    "candidate_retry_policy": {
+                        "authorized_paid_retries": 1,
+                        "cost_included_in_total": True,
+                    },
+                },
+            },
+        )
+
+        build_settings.assert_not_called()
+        run_candidate.assert_not_called()
+        self.assertEqual(
+            update_candidate.call_args.kwargs["error_code"],
+            "PRODUCT_UNAVAILABLE",
+        )
 
     @patch(
         "app.api.v1.final_generation.get_job",

@@ -191,6 +191,65 @@ class PromptActivationAuditRow(Base):
     )
 
 
+class ProductCatalogRow(Base):
+    """Recoverable advertising-product catalog used by Studio."""
+
+    __tablename__ = "product_catalog"
+    __table_args__ = (
+        Index(
+            "ix_product_catalog_active_archived_updated",
+            "is_active",
+            "archived_at",
+            "updated_at",
+        ),
+    )
+
+    product_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(64), default="")
+    event_name: Mapped[str] = mapped_column(String(255), default="")
+    curator: Mapped[str] = mapped_column(String(255), default="")
+    name: Mapped[str] = mapped_column(String(255))
+    product_option: Mapped[str] = mapped_column(String(255), default="")
+    sale_price: Mapped[int] = mapped_column(Integer, default=0)
+    discount_label: Mapped[str] = mapped_column(String(100), default="")
+    image_url: Mapped[str] = mapped_column(String(2048))
+    detail_image_urls_json: Mapped[str] = mapped_column(Text, default="[]")
+    square_output_strategy: Mapped[str] = mapped_column(
+        String(32), default="center_crop"
+    )
+    raw_product_json: Mapped[str] = mapped_column(Text, default="{}")
+    is_active: Mapped[bool] = mapped_column(default=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    asset_verified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activation_review_note: Mapped[str | None] = mapped_column(Text)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class ProductActivationAuditRow(Base):
+    """Append-only operator acknowledgement for catalog activation."""
+
+    __tablename__ = "product_activation_audits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    product_id: Mapped[str] = mapped_column(String(64), index=True)
+    product_revision: Mapped[int] = mapped_column(Integer)
+    review_note: Mapped[str] = mapped_column(Text)
+    activated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+
+
 def get_engine():
     from app.core.config import settings
 
@@ -357,9 +416,11 @@ def init_db() -> None:
 
     # Import lazily to keep the DB model module free of an import cycle. Missing
     # or invalid resource files intentionally fail application startup.
+    from app.products import seed_builtin_product_catalog
     from app.prompt_versions import seed_builtin_prompt_version
 
     seed_builtin_prompt_version(bind=engine)
+    seed_builtin_product_catalog(bind=engine)
 
 
 class SQLAlchemySettingsRepository(SettingsRepository):

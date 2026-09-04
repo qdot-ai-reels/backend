@@ -50,6 +50,24 @@ class GenerationRequestLookupTests(unittest.TestCase):
             return_value=builtin_prompt_snapshot(),
         )
         self.prompt_snapshot_patch.start()
+        self.catalog_product_patch = patch(
+            "app.api.v1.final_generation.resolve_active_generation_product",
+            side_effect=lambda product, image_url, revision: {
+                "product": {
+                    **product,
+                    "product_id": "catalog-product-1",
+                    "catalog_revision": revision,
+                },
+                "image_url": image_url,
+                "square_output_strategy": "reject",
+                "revision": revision,
+            },
+        )
+        self.catalog_product_patch.start()
+        self.catalog_guard_patch = patch(
+            "app.generation_jobs.require_active_product_revision"
+        )
+        self.catalog_guard_patch.start()
         self.app = FastAPI()
         self.app.include_router(router)
 
@@ -59,6 +77,7 @@ class GenerationRequestLookupTests(unittest.TestCase):
             "product": {"name": "상품"},
             "image_url": "https://example.com/product.jpg",
             "template_id": "ugc_quick_4",
+            "product_catalog_revision": 1,
             "quote_id": "quote-1",
             "visual_mode": "generated_model",
             "candidate_count": 1,
@@ -72,6 +91,8 @@ class GenerationRequestLookupTests(unittest.TestCase):
         return canonical_request_hash(payload)
 
     def tearDown(self):
+        self.catalog_guard_patch.stop()
+        self.catalog_product_patch.stop()
         self.prompt_snapshot_patch.stop()
         self.session_patch.stop()
         self.engine.dispose()

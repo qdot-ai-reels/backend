@@ -290,6 +290,10 @@ def quote_to_public(row: GenerationQuoteRow) -> dict[str, Any]:
         },
         "coverage": row.coverage,
         "automatic_paid_retries": 0,
+        "candidate_retry_policy": {
+            "authorized_paid_retries": 0,
+            "cost_included_in_total": False,
+        },
         "disclaimer": row.disclaimer,
         "created_at": _as_utc(row.created_at).isoformat(),
         "expires_at": _as_utc(row.expires_at).isoformat(),

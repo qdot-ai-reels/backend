@@ -15,6 +15,7 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.db import GenerationJobRow, GenerationRequestRow, SessionLocal
+from app.products import require_active_product_revision
 
 
 PUBLIC_ERROR_MESSAGES = {
@@ -29,6 +30,9 @@ PUBLIC_ERROR_MESSAGES = {
     "VIDEO_GENERATION_FAILED": "영상 후보를 생성하지 못했습니다. 새 견적이 필요합니다.",
     "AUDIO_MERGE_FAILED": "영상과 음성을 결합하지 못했습니다.",
     "CAPTION_RENDER_FAILED": "영상 자막을 렌더링하지 못했습니다.",
+    "PRODUCT_UNAVAILABLE": "선택한 상품이 비활성 또는 보관 상태입니다. 상품을 다시 선택해 주세요.",
+    "PRODUCT_CATALOG_CHANGED": "선택한 상품이 변경되었습니다. 새 견적을 사용해 주세요.",
+    "PAID_RETRY_QUOTE_REQUIRED": "유료 후보 재시도 비용을 포함한 새 견적이 필요합니다.",
     "GENERATION_FAILED": "영상 생성 작업을 완료하지 못했습니다.",
 }
 UNSAFE_CANDIDATE_RETRY_CODES = frozenset(PUBLIC_ERROR_MESSAGES)
@@ -47,6 +51,7 @@ PUBLIC_CANDIDATE_FIELDS = frozenset(
         "error",
         "error_code",
         "retryable",
+        "paid_retry_count",
         "legacy_artifact",
     }
 )
@@ -74,6 +79,14 @@ class GenerationRequestReservation:
     existing_request_hash: str | None = None
 
 
+class CandidateRetryConflictError(ValueError):
+    """Raised when a candidate can no longer be reserved for retry."""
+
+
+class PaidRetryAuthorizationError(CandidateRetryConflictError):
+    """Raised when a template job has no remaining quoted paid retry."""
+
+
 def _new_candidates(candidate_count: int) -> list[dict[str, Any]]:
     return [
         {
@@ -90,6 +103,7 @@ def _new_candidates(candidate_count: int) -> list[dict[str, Any]]:
             "error": None,
             "error_code": None,
             "retryable": None,
+            "paid_retry_count": 0,
         }
         for index in range(1, candidate_count + 1)
     ]
@@ -107,9 +121,23 @@ def create_job(
     client_request_id: str | None = None,
     request_hash: str | None = None,
     reservation_owner_token: str | None = None,
+    catalog_product_id: str | None = None,
+    catalog_revision: int | None = None,
 ) -> bool:
     candidates = _new_candidates(candidate_count)
+    if (catalog_product_id is None) != (catalog_revision is None):
+        raise ValueError("catalog product ID와 revision은 함께 제공해야 합니다.")
     with SessionLocal() as session:
+        if catalog_product_id is not None and catalog_revision is not None:
+            # This lock and the generation-request acceptance share one
+            # transaction. Product state therefore cannot change between the
+            # final catalog CAS and the durable ACCEPTED/job boundary.
+            require_active_product_revision(
+                session,
+                catalog_product_id,
+                catalog_revision,
+                lock=True,
+            )
         if reservation_owner_token is not None:
             if client_request_id is None or request_hash is None:
                 raise ValueError("예약 작업 생성에는 request ID와 hash가 필요합니다.")
@@ -197,6 +225,7 @@ def update_candidate(
         "error",
         "error_code",
         "retryable",
+        "paid_retry_count",
     }
     unknown = set(values) - allowed
     if unknown:
@@ -227,6 +256,105 @@ def update_candidate(
         row.updated_at = datetime.now(timezone.utc)
         session.commit()
         return candidate
+
+
+def reserve_candidate_retry(
+    job_id: str,
+    candidate_id: str,
+    *,
+    paid_retry_limit: int | None = None,
+    catalog_product_id: str | None = None,
+    catalog_revision: int | None = None,
+) -> dict[str, Any]:
+    """Atomically reserve one retry, its quote allowance, and catalog CAS."""
+    if (catalog_product_id is None) != (catalog_revision is None):
+        raise ValueError("catalog product ID와 revision은 함께 제공해야 합니다.")
+    catalog_guard_enabled = catalog_product_id is not None
+    if catalog_guard_enabled != (paid_retry_limit is not None):
+        raise PaidRetryAuthorizationError(
+            "Studio 후보 재시도에는 상품 CAS와 유료 재시도 견적이 모두 필요합니다."
+        )
+    if paid_retry_limit is not None and (
+        isinstance(paid_retry_limit, bool)
+        or not isinstance(paid_retry_limit, int)
+        or paid_retry_limit < 1
+    ):
+        raise PaidRetryAuthorizationError(
+            "유료 후보 재시도를 포함한 새 견적이 필요합니다."
+        )
+
+    with SessionLocal() as session:
+        if catalog_product_id is not None and catalog_revision is not None:
+            require_active_product_revision(
+                session,
+                catalog_product_id,
+                catalog_revision,
+                lock=True,
+            )
+        row = session.scalar(
+            select(GenerationJobRow)
+            .where(GenerationJobRow.job_id == job_id)
+            .with_for_update()
+        )
+        if row is None:
+            raise CandidateRetryConflictError(f"작업을 찾을 수 없습니다: {job_id}")
+        if row.status not in {"COMPLETED", "PARTIAL_COMPLETED", "FAILED"}:
+            raise CandidateRetryConflictError(
+                "진행 중인 생성 작업의 후보는 다시 실행할 수 없습니다."
+            )
+        candidates = _json_list(row.candidates_json)
+        candidate = next(
+            (item for item in candidates if item.get("candidate_id") == candidate_id),
+            None,
+        )
+        if candidate is None:
+            raise CandidateRetryConflictError(
+                f"영상 후보를 찾을 수 없습니다: {candidate_id}"
+            )
+        if candidate.get("status") != "FAILED":
+            raise CandidateRetryConflictError(
+                "FAILED 상태의 영상 후보만 다시 생성할 수 있습니다."
+            )
+        if candidate.get("retryable") is not True:
+            raise CandidateRetryConflictError(
+                "이 후보는 안전한 후보 단독 재시도 대상이 아닙니다."
+            )
+
+        retry_counts: list[int] = []
+        for item in candidates:
+            value = item.get("paid_retry_count", 0)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise PaidRetryAuthorizationError(
+                    "유료 후보 재시도 사용 기록을 확인할 수 없어 새 견적이 필요합니다."
+                )
+            retry_counts.append(value)
+        if paid_retry_limit is not None and sum(retry_counts) >= paid_retry_limit:
+            raise PaidRetryAuthorizationError(
+                "견적에 포함된 유료 후보 재시도 횟수를 모두 사용했습니다. 새 견적이 필요합니다."
+            )
+
+        prior = dict(candidate)
+        candidate.update(
+            {
+                "status": "PENDING",
+                "stage": "QUEUED",
+                "provider_job_id": None,
+                "caption_job_id": None,
+                "output_path": None,
+                "validation": None,
+                "error": None,
+                "error_code": None,
+                "retryable": None,
+                "paid_retry_count": int(candidate.get("paid_retry_count", 0)) + 1,
+            }
+        )
+        row.candidates_json = json.dumps(candidates, ensure_ascii=False)
+        row.status = "PROCESSING"
+        row.stage = "VIDEO_GENERATION"
+        row.error_message = None
+        row.updated_at = datetime.now(timezone.utc)
+        session.commit()
+        return prior
 
 
 def get_job(job_id: str) -> dict[str, Any] | None:

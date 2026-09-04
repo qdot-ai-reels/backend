@@ -83,6 +83,13 @@ class GenerationQuoteTests(unittest.TestCase):
         self.assertEqual(result["coverage"], "video_only")
         self.assertEqual(result["automatic_paid_retries"], 0)
         self.assertEqual(
+            result["candidate_retry_policy"],
+            {
+                "authorized_paid_retries": 0,
+                "cost_included_in_total": False,
+            },
+        )
+        self.assertEqual(
             datetime.fromisoformat(result["expires_at"]),
             self.now + timedelta(minutes=15),
         )

@@ -16,8 +16,16 @@ from urllib.parse import urlparse
 
 
 logger = logging.getLogger(__name__)
-SUPPORTED_IMAGE_FORMATS = frozenset({"jpeg", "jpg", "png", "bmp", "webp"})
-MAX_REMOTE_IMAGE_BYTES = 25 * 1024 * 1024
+SUPPORTED_IMAGE_FORMATS = frozenset({"jpeg", "jpg", "png", "webp"})
+MAX_REMOTE_IMAGE_BYTES = 15 * 1024 * 1024
+
+
+def _image_host_for_log(image_url: str) -> str:
+    """Return only a non-sensitive host label for rejected remote URLs."""
+    try:
+        return urlparse(image_url).hostname or "<invalid>"
+    except ValueError:
+        return "<invalid>"
 
 
 def _host_matches_allowlist(hostname: str, allowed_hosts: Sequence[str]) -> bool:
@@ -89,12 +97,12 @@ def _probe_remote_image(image_url: str) -> tuple[int, int, str]:
         ) as output:
             content_length = response.headers.get("Content-Length")
             if content_length and int(content_length) > MAX_REMOTE_IMAGE_BYTES:
-                raise ValueError("이미지 파일이 25MB 제한을 초과합니다.")
+                raise ValueError("이미지 파일이 15MB 제한을 초과합니다.")
             total = 0
             while chunk := response.read(64 * 1024):
                 total += len(chunk)
                 if total > MAX_REMOTE_IMAGE_BYTES:
-                    raise ValueError("이미지 파일이 25MB 제한을 초과합니다.")
+                    raise ValueError("이미지 파일이 15MB 제한을 초과합니다.")
                 output.write(chunk)
             output.flush()
             result = subprocess.run(
@@ -229,9 +237,9 @@ def validate_image_inputs(
                 validate_image_format(detail_image_url, format_reader=format_reader)
         except ValueError as error:
             logger.warning(
-                "Skipping invalid product detail image: index=%s url=%s reason=%s",
+                "Skipping invalid product detail image: index=%s host=%s reason=%s",
                 index,
-                detail_image_url,
+                _image_host_for_log(detail_image_url),
                 error,
             )
             continue

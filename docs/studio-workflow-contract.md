@@ -151,10 +151,38 @@ The response contains `line_items`, `total.min`, `total.expected`, `total.max`,
 `created_at`, `expires_at`, and the selected model snapshot. `coverage` is
 explicitly `video_only`: script generation, TTS, rendering, and a user-triggered
 paid retry are not represented as if they were free or known. Automatic paid
-video retry remains zero. `total.max` is the user-approved upper estimate for
+video retry remains zero. `candidate_retry_policy` explicitly reports
+`authorized_paid_retries: 0` and `cost_included_in_total: false` for the current
+generation quote. `total.max` is the user-approved upper estimate for
 that generation click and the configured rate card's upper value shown at
 confirmation; it is not a provider-account hard spending cap.
 Changing any quoted input requires a new quote.
+
+### Product catalog
+
+Studio reads advertising products from `GET /products`. `include_inactive=true`
+adds inactive and archived records for the management screen. Registration
+requires every primary and detail image to be a publicly fetchable JPEG, PNG, or
+WebP no larger than 15 MiB, at least 512 pixels on each side, and with a
+longest-to-shortest-side ratio no greater than 4:1. A bad detail image rejects
+the whole catalog mutation instead of being silently dropped. Registration
+always creates revision 1 as inactive.
+Activation requires `expected_revision`, `asset_review_acknowledged: true`, and a
+non-empty `review_note`; edits automatically invalidate that acknowledgement and
+deactivate the product. Archive is a recoverable soft delete.
+
+Every mutating request is revision-bound. A stale update or state transition
+returns HTTP 409 `PRODUCT_REVISION_CONFLICT`, except that repeating archive for
+an already archived product is idempotent and returns the current product with
+HTTP 200 even when the caller carries the revision from the first successful
+request. The public `raw_product` includes the same derived `catalog_revision` as
+the top-level `revision` so the generation payload can retain its product
+snapshot provenance.
+
+The product routes currently have no application-level operator authentication.
+Before public exposure, create, update, activate, deactivate, and archive must be
+protected by authenticated product-operator authorization/RBAC; hiding the
+management UI is not an authorization control.
 
 ### `POST /generate`
 
@@ -163,7 +191,14 @@ send a template without a script:
 
 ```json
 {
-  "product": {"name": "상품", "image_url": "https://cdn.example/product.jpg"},
+  "product": {
+    "product_id": "catalog-product-id",
+    "catalog_revision": 3,
+    "name": "상품",
+    "image_url": "https://cdn.example/product.jpg"
+  },
+  "image_url": "https://cdn.example/product.jpg",
+  "product_catalog_revision": 3,
   "template_id": "ugc_full_15",
   "template_version": 1,
   "quote_id": "persisted-quote-id",
@@ -184,9 +219,17 @@ send a template without a script:
 }
 ```
 
-Every request containing `template_id` must include both `quote_id` and
-`client_request_id`. This makes the non-legacy Studio path explicitly budgeted
-and idempotent. The legacy product-and-script request without `template_id`
+Every request containing `template_id` must include `quote_id`,
+`client_request_id`, and `product_catalog_revision`. Before any quote validation
+or paid work, the server requires the product to be active and not archived,
+checks the revision and image URL, and replaces client product text with the
+canonical catalog snapshot. An inactive product returns `PRODUCT_UNAVAILABLE`;
+a stale revision or image returns `PRODUCT_CATALOG_CHANGED`, both with HTTP 409.
+Immediately before acceptance, the server locks that catalog row and repeats the
+active/revision CAS in the same transaction that changes the request to
+`ACCEPTED` and inserts the generation job. A failed CAS leaves both uncommitted.
+This makes the non-legacy Studio path explicitly budgeted, idempotent, and
+server-authoritative. The legacy product-and-script request without `template_id`
 remains valid and defaults to one candidate.
 
 The nested `creative_brief` is authoritative for fields it contains. Existing
@@ -265,7 +308,21 @@ is failed, and its public `retryable` value is exactly true. Provider timeout,
 provider unavailability, shared script/TTS failures, and paid generation
 failures are deliberately non-retryable: they require provider reconciliation,
 whole-job recovery, or a new quote. A worker cannot race a retry while the
-parent remains active.
+parent remains active. For a Studio/template job, the persisted quote must also
+explicitly set `candidate_retry_policy.cost_included_in_total` to true and a
+positive `authorized_paid_retries`; otherwise the endpoint fails closed with
+`PAID_RETRY_QUOTE_REQUIRED` 409. The current ordinary quote authorizes zero, so
+the product must add a dedicated retry-cost quote flow before enabling this CTA.
+
+When a paid retry is authorized, one transaction locks the current catalog
+product and generation job, verifies active/revision state, checks the total
+consumed retry count across candidates, consumes one allowance, and moves the
+candidate back to `PENDING`. The worker rechecks narration presence, quote
+coverage, and catalog active/revision immediately before entering the paid video
+provider boundary. Catalog failures surface as `PRODUCT_UNAVAILABLE` or
+`PRODUCT_CATALOG_CHANGED`; concurrent state conflicts use
+`CANDIDATE_RETRY_CONFLICT`. Non-template legacy jobs retain their existing
+low-level retry behavior.
 
 ## Current asynchronous boundary
 
@@ -305,8 +362,9 @@ Before multi-instance or zero-downtime production deployment:
 6. Add Korean word-level forced-alignment evidence. The current continuous TTS
    preserves natural prosody and fits the total voiced window, but it does not
    independently prove every internal phrase boundary against its caption.
-7. Add authenticated operator authorization for prompt settings and owner-scope
-   generation jobs/requests before exposing these routes on a public network.
+7. Add authenticated operator authorization for prompt settings and product
+   catalog mutations, plus owner-scope generation jobs/requests, before exposing
+   these routes on a public network.
 8. Add retention/tombstone policy for prompt activation audits, generation
    request reservations, quotes, and private prompt snapshots.
 9. Split the prompt settings catalog into paginated metadata and a single-version

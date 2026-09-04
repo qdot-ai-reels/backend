@@ -29,11 +29,13 @@ from app.api.v1.video import publish_validated_video, select_video_resolution
 from app.core.config import settings
 from app.db import SQLAlchemySettingsRepository, SessionLocal
 from app.generation_jobs import (
+    CandidateRetryConflictError,
     GENERATION_REQUEST_ACCEPTED,
     GENERATION_REQUEST_CONFLICT,
     GENERATION_REQUEST_IN_PROGRESS,
     GENERATION_REQUEST_REJECTED,
     GenerationRequestReservation,
+    PaidRetryAuthorizationError,
     _error_metadata,
     accept_generation_request_existing_job,
     create_job,
@@ -43,6 +45,7 @@ from app.generation_jobs import (
     get_job_payload,
     list_generation_jobs,
     reject_generation_request,
+    reserve_candidate_retry,
     reserve_generation_request,
     update_candidate,
     update_job,
@@ -63,6 +66,13 @@ from app.prompt_versions import (
     get_active_prompt_version,
     get_prompt_version,
     render_creative_brief,
+)
+from app.products import (
+    ProductCatalogInactiveError,
+    ProductCatalogNotFoundError,
+    ProductCatalogRevisionConflictError,
+    ProductCatalogValidationError,
+    resolve_active_generation_product,
 )
 from app.generation_templates import (
     GenerationTemplateError,
@@ -170,6 +180,7 @@ class FinalGenerationBody(BaseModel):
     template_version: int | None = Field(default=None, ge=1)
     quote_id: str | None = Field(default=None, min_length=1, max_length=64)
     prompt_version_id: str | None = Field(default=None, min_length=1, max_length=64)
+    product_catalog_revision: int | None = Field(default=None, ge=1)
     client_request_id: str | None = Field(default=None, min_length=1, max_length=128)
     resolution: Literal["1080p"] = "1080p"
     visual_mode: Literal[
@@ -194,6 +205,10 @@ class FinalGenerationBody(BaseModel):
                 raise ValueError("template_id 생성에는 quote_id가 필요합니다.")
             if self.client_request_id is None or not self.client_request_id.strip():
                 raise ValueError("template_id 생성에는 client_request_id가 필요합니다.")
+            if self.product_catalog_revision is None:
+                raise ValueError(
+                    "template_id 생성에는 product_catalog_revision이 필요합니다."
+                )
         return self
 
 
@@ -546,6 +561,56 @@ def _load_quoted_prompt_snapshot(quote: dict[str, Any]) -> PromptBundleSnapshot:
     return snapshot
 
 
+def _template_catalog_identity(
+    payload: dict[str, Any],
+) -> tuple[str, int] | None:
+    """Read the immutable catalog identity from a Studio job snapshot."""
+    if not isinstance(payload.get("template_id"), str) and not isinstance(
+        payload.get("template"), dict
+    ):
+        return None
+    product = payload.get("product")
+    if not isinstance(product, dict):
+        raise ProductCatalogNotFoundError(
+            "재시도할 Studio 작업에 상품 정보가 없습니다."
+        )
+    nested = product.get("product")
+    source = nested if isinstance(nested, dict) else product
+    product_id = source.get("product_id") or product.get("product_id")
+    if not isinstance(product_id, str) or not product_id.strip():
+        raise ProductCatalogNotFoundError(
+            "재시도할 Studio 작업에 product_id가 없습니다."
+        )
+    revision = payload.get("product_catalog_revision")
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+        raise ProductCatalogRevisionConflictError(
+            "재시도할 Studio 작업의 상품 revision을 확인할 수 없습니다. 새 견적이 필요합니다."
+        )
+    return product_id.strip(), revision
+
+
+def _quoted_paid_retry_limit(payload: dict[str, Any]) -> int:
+    """Require an explicit quote policy whose total includes manual retries."""
+    quote = payload.get("quote")
+    policy = quote.get("candidate_retry_policy") if isinstance(quote, dict) else None
+    authorized = (
+        policy.get("authorized_paid_retries")
+        if isinstance(policy, dict)
+        else None
+    )
+    if (
+        not isinstance(policy, dict)
+        or policy.get("cost_included_in_total") is not True
+        or isinstance(authorized, bool)
+        or not isinstance(authorized, int)
+        or authorized < 1
+    ):
+        raise PaidRetryAuthorizationError(
+            "기존 견적에는 유료 후보 재시도 비용이 포함되지 않았습니다. 새 견적이 필요합니다."
+        )
+    return authorized
+
+
 def _render_studio_creative_brief(
     snapshot: PromptBundleSnapshot,
     payload: dict[str, Any],
@@ -674,7 +739,48 @@ def start_generation(
 
     job_id = uuid.uuid4().hex
     input_type = "product_template" if body.script is None else "product_and_script"
-    image_url = body.image_url or _extract_image_url(body.product)
+    payload = body.model_dump()
+    if body.template_id is not None:
+        try:
+            catalog_product = resolve_active_generation_product(
+                body.product,
+                body.image_url,
+                int(body.product_catalog_revision),
+            )
+        except ProductCatalogNotFoundError as error:
+            _persist_rejection_and_raise(
+                reservation,
+                status_code=409,
+                code="PRODUCT_UNAVAILABLE",
+                message=str(error),
+            )
+        except ProductCatalogInactiveError as error:
+            _persist_rejection_and_raise(
+                reservation,
+                status_code=409,
+                code="PRODUCT_UNAVAILABLE",
+                message=str(error),
+            )
+        except ProductCatalogRevisionConflictError as error:
+            _persist_rejection_and_raise(
+                reservation,
+                status_code=409,
+                code="PRODUCT_CATALOG_CHANGED",
+                message=str(error),
+            )
+        except ProductCatalogValidationError as error:
+            _persist_rejection_and_raise(
+                reservation,
+                status_code=422,
+                code="REQUEST_VALIDATION_FAILED",
+                message=str(error),
+            )
+        payload["product"] = catalog_product["product"]
+        payload["image_url"] = catalog_product["image_url"]
+        payload["square_output_strategy"] = catalog_product[
+            "square_output_strategy"
+        ]
+    image_url = payload.get("image_url") or _extract_image_url(payload["product"])
     if not image_url:
         _persist_rejection_and_raise(
             reservation,
@@ -682,7 +788,6 @@ def start_generation(
             code="REQUEST_VALIDATION_FAILED",
             message="상품 이미지 URL이 필요합니다.",
         )
-    payload = body.model_dump()
     try:
         _canonicalize_creative_brief_options(body, payload)
         template = (
@@ -716,15 +821,11 @@ def start_generation(
             "model_included" if influencer_image_urls else "product_only"
         )
         payload["visual_mode"] = effective_visual_mode
-        if (
-            body.square_output_strategy == SquareOutputStrategy.CENTER_CROP.value
-            and influencer_image_urls
-        ):
-            raise ValueError(
-                "center_crop은 검수된 product-only 입력에서만 사용할 수 있습니다."
-            )
+        if influencer_image_urls:
+            # Identity-reference output must not be cropped after generation.
+            payload["square_output_strategy"] = SquareOutputStrategy.REJECT.value
         validate_product_image_inputs(
-            body.product,
+            payload["product"],
             image_url,
             influencer_image_urls,
         )
@@ -817,10 +918,11 @@ def start_generation(
             )
 
     try:
+        catalog_identity = _template_catalog_identity(payload)
         created = create_job(
             job_id,
             input_type=input_type,
-            product=body.product,
+            product=payload.get("product"),
             script=payload.get("script"),
             image_url=image_url,
             payload=payload,
@@ -832,6 +934,36 @@ def start_generation(
                 if reservation is not None and reservation.is_owner
                 else None
             ),
+            catalog_product_id=(
+                catalog_identity[0] if catalog_identity is not None else None
+            ),
+            catalog_revision=(
+                catalog_identity[1] if catalog_identity is not None else None
+            ),
+        )
+    except (
+        ProductCatalogNotFoundError,
+        ProductCatalogInactiveError,
+    ) as error:
+        _persist_rejection_and_raise(
+            reservation,
+            status_code=409,
+            code="PRODUCT_UNAVAILABLE",
+            message=str(error),
+        )
+    except ProductCatalogRevisionConflictError as error:
+        _persist_rejection_and_raise(
+            reservation,
+            status_code=409,
+            code="PRODUCT_CATALOG_CHANGED",
+            message=str(error),
+        )
+    except ProductCatalogValidationError as error:
+        _persist_rejection_and_raise(
+            reservation,
+            status_code=422,
+            code="REQUEST_VALIDATION_FAILED",
+            message=str(error),
         )
     except IntegrityError as error:
         existing = (
@@ -1079,34 +1211,108 @@ def retry_candidate(
     payload = get_job_payload(job_id)
     if payload is None:
         raise HTTPException(status_code=409, detail="재시도 입력 데이터를 찾을 수 없습니다.")
+    try:
+        catalog_identity = _template_catalog_identity(payload)
+        paid_retry_limit = (
+            _quoted_paid_retry_limit(payload)
+            if catalog_identity is not None
+            else None
+        )
+    except PaidRetryAuthorizationError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PAID_RETRY_QUOTE_REQUIRED",
+                "message": str(error),
+            },
+        ) from error
+    except (
+        ProductCatalogNotFoundError,
+        ProductCatalogInactiveError,
+        ProductCatalogValidationError,
+    ) as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "PRODUCT_UNAVAILABLE", "message": str(error)},
+        ) from error
+    except ProductCatalogRevisionConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "PRODUCT_CATALOG_CHANGED", "message": str(error)},
+        ) from error
     audio_path = Path("runtime/tts") / job_id / "narration.mp3"
     if not audio_path.is_file():
         raise HTTPException(status_code=409, detail="재시도용 narration 파일을 찾을 수 없습니다.")
-    try:
-        update_candidate(
+    if catalog_identity is None:
+        # Preserve the pre-catalog low-level path. It has no Studio quote or
+        # catalog claims, so its existing retry behavior remains unchanged.
+        try:
+            update_candidate(
+                job_id,
+                candidate_id,
+                expected_status="FAILED",
+                status="PENDING",
+                stage="QUEUED",
+                provider_job_id=None,
+                caption_job_id=None,
+                output_path=None,
+                validation=None,
+                error=None,
+                error_code=None,
+                retryable=None,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        update_job(
             job_id,
-            candidate_id,
-            expected_status="FAILED",
-            status="PENDING",
-            stage="QUEUED",
-            provider_job_id=None,
-            caption_job_id=None,
-            output_path=None,
-            validation=None,
-            error=None,
-            error_code=None,
-            retryable=None,
+            status="PROCESSING",
+            stage="VIDEO_GENERATION",
+            error_message=None,
         )
-    except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    update_job(job_id, status="PROCESSING", stage="VIDEO_GENERATION", error_message=None)
+        prior_candidate = candidate
+    else:
+        try:
+            prior_candidate = reserve_candidate_retry(
+                job_id,
+                candidate_id,
+                paid_retry_limit=paid_retry_limit,
+                catalog_product_id=catalog_identity[0],
+                catalog_revision=catalog_identity[1],
+            )
+        except PaidRetryAuthorizationError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "PAID_RETRY_QUOTE_REQUIRED",
+                    "message": str(error),
+                },
+            ) from error
+        except (
+            ProductCatalogNotFoundError,
+            ProductCatalogInactiveError,
+            ProductCatalogValidationError,
+        ) as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "PRODUCT_UNAVAILABLE", "message": str(error)},
+            ) from error
+        except ProductCatalogRevisionConflictError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "PRODUCT_CATALOG_CHANGED", "message": str(error)},
+            ) from error
+        except CandidateRetryConflictError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "CANDIDATE_RETRY_CONFLICT", "message": str(error)},
+            ) from error
     InProcessGenerationDispatcher(background_tasks).enqueue(
         run_candidate_retry,
         job_id,
         candidate_id,
         payload,
-        float(candidate.get("cost") or 0.0),
-        int(candidate.get("attempts") or 0),
+        float(prior_candidate.get("cost") or 0.0),
+        int(prior_candidate.get("attempts") or 0),
     )
     return {
         "job_id": job_id,
@@ -1125,17 +1331,28 @@ def run_candidate_retry(
 ) -> None:
     session = None
     try:
-        service, session = _build_settings_service()
         script = payload.get("script")
         image_url = payload.get("image_url") or _extract_image_url(payload.get("product"))
         if not isinstance(script, dict) or not image_url:
             raise ValueError("재시도에 필요한 스크립트 또는 상품 이미지가 없습니다.")
+        audio_path = Path("runtime/tts") / job_id / "narration.mp3"
+        if not audio_path.is_file():
+            raise ValueError("재시도용 narration 파일을 찾을 수 없습니다.")
+        catalog_identity = _template_catalog_identity(payload)
+        if catalog_identity is not None:
+            _quoted_paid_retry_limit(payload)
+            resolve_active_generation_product(
+                payload["product"],
+                image_url,
+                catalog_identity[1],
+            )
+        service, session = _build_settings_service()
         _run_candidate(
             job_id=job_id,
             candidate_id=candidate_id,
             payload=payload,
             script=script,
-            audio_path=Path("runtime/tts") / job_id / "narration.mp3",
+            audio_path=audio_path,
             image_url=image_url,
             influencer_image_urls=resolve_influencer_image_urls(payload),
             service=service,
@@ -1150,9 +1367,23 @@ def run_candidate_retry(
             candidate_id,
             error,
         )
-        error_code, retryable = _error_metadata(
-            "FAILED", "VIDEO_GENERATION", str(error)
-        )
+        if isinstance(
+            error,
+            (
+                ProductCatalogNotFoundError,
+                ProductCatalogInactiveError,
+                ProductCatalogValidationError,
+            ),
+        ):
+            error_code, retryable = "PRODUCT_UNAVAILABLE", False
+        elif isinstance(error, ProductCatalogRevisionConflictError):
+            error_code, retryable = "PRODUCT_CATALOG_CHANGED", False
+        elif isinstance(error, PaidRetryAuthorizationError):
+            error_code, retryable = "PAID_RETRY_QUOTE_REQUIRED", False
+        else:
+            error_code, retryable = _error_metadata(
+                "FAILED", "VIDEO_GENERATION", str(error)
+            )
         update_candidate(
             job_id,
             candidate_id,
