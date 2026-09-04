@@ -81,8 +81,9 @@ The response contains `line_items`, `total.min`, `total.expected`, `total.max`,
 `created_at`, `expires_at`, and the selected model snapshot. `coverage` is
 explicitly `video_only`: script generation, TTS, rendering, and a user-triggered
 paid retry are not represented as if they were free or known. Automatic paid
-video retry remains zero. `total.max` is the user's approval ceiling for that
-generation click; changing any quoted input requires a new quote.
+video retry remains zero. `total.max` is the configured rate card's upper
+estimate shown at confirmation; it is not a provider-account hard spending cap.
+Changing any quoted input requires a new quote.
 
 ### `POST /generate`
 

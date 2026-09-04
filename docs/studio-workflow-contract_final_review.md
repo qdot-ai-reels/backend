@@ -18,7 +18,7 @@ alignment remain explicit production blockers.
 | --- | --- | --- |
 | Versioned 4/6/8/15 templates | PASS | Exact plans and integral provider duration tests |
 | Pre-generation quote | PASS | 15-minute persisted quote, capability preflight, fixed snapshot |
-| Spend approval | PASS | `total.max` is the per-click approval ceiling; zero automatic paid retries |
+| Spend forecast | PARTIAL | `total.max` is the displayed video-provider upper estimate and automatic paid retries are zero; a provider/account hard cap and full-pipeline ledger remain deferred |
 | Studio submit safety | PASS | `quote_id` and `client_request_id` required with `template_id` |
 | Idempotency | PASS | Same canonical request replays; changed body returns 409 |
 | Resolution consistency | PASS | Quoted `1080p` snapshot reaches the provider request |
@@ -93,8 +93,9 @@ traceback is gone. Existing non-failing Starlette deprecation and mocked
 
 ## User review points
 
-- Confirm that `total.max`, not `total.expected`, is the amount shown at the
-  final generation confirmation.
+- Confirm that both `total.expected` and `total.max` are shown as video-provider
+  estimates at final confirmation, without describing either as a guaranteed
+  provider/account hard cap.
 - Confirm that retry-disabled errors lead to provider reconciliation or a fresh
   quote instead of a one-click resubmit.
 - Confirm whether legacy artifacts should remain labeled `legacy-primary` in
@@ -109,5 +110,7 @@ traceback is gone. Existing non-failing Starlette deprecation and mocked
 - Narration and final media remain host-local rather than checksummed object
   storage artifacts.
 - No authentication or ownership boundary protects the management APIs yet.
+- The quote does not cover script/TTS/render/storage and does not enforce an
+  account-level hard budget after provider submission.
 - Korean audio has duration fitting but no word-level forced-alignment proof.
 - This review made no paid script, TTS, or video generation request.
