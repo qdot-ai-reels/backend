@@ -19,6 +19,7 @@ from app.image_metadata import (
     validate_image_inputs,
     validate_normalized_influencer_references,
 )
+from app.prompt_versions import builtin_prompt_snapshot, render_prompt_template
 from app.script_generator import (
     OpenRouterConfigurationError,
     OpenRouterRequestError,
@@ -37,51 +38,6 @@ EXACT_VIDEO_SIZE_BY_RESOLUTION_AND_ASPECT_RATIO = {
     ("1080p", "9:16"): "1080x1920",
 }
 logger = logging.getLogger(__name__)
-
-
-# Keep this block identical to the Colab video-generation condition prompt.
-VIDEO_CONDITION_PROMPT = """
-### Condition
-1. Video Rules
-- No dialogue or direct-to-camera speech.
-- Keep the same person's appearance and clothing consistent across shots.
-- Preserve the provided product's shape, color, package structure, and label placement.
-
-2. reference (person) image
-- Use the provided person image as the character reference. The person in the image was generated using AI.
-- Front-facing appearance is not required.
-
-3. Anti-Slop Prompt For Video
-Camera
-- slight handheld motion
-
-People
-- imperfect skin texture
-- subtle blemishes
-- subtle clothing wrinkles
-- natural and subtle asymmetry
-
-4. Text & Label Policy
-- No added subtitles, captions, price, discount, or CTA text.
-- Do not intentionally show product text in a readable close-up.
-- Preserve the original product label and graphics.
-- Do not generate or modify package text or logos.
-"""
-
-INFLUENCER_VISIBILITY_PROMPT = (
-    "\n\nThe AI influencer must be clearly visible on screen. "
-    "Do not replace the influencer with only a hand, finger, or an off-screen action."
-)
-
-GENERATED_MODEL_PROMPT = """
-
-The video must feature one clearly visible, fully synthetic adult Korean woman as the UGC presenter.
-Create the presenter from the text prompt only; do not imitate or reconstruct any real person.
-Show her upper body and face for most of the clip while she naturally holds or presents the supplied product.
-Keep the presenter, outfit, hands, and product consistent throughout the clip.
-The supplied product image is a product identity reference, not the opening frame.
-Use a vertical social-video composition with the presenter and product both inside the center safe area.
-"""
 
 
 class VideoGenerationError(RuntimeError):
@@ -122,6 +78,7 @@ class VideoGenerationRequest:
     influencer_image_urls: tuple[str, ...] = ()
     detail_image_urls: tuple[str, ...] = ()
     visual_mode: str = "product_only"
+    prompt_templates: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -136,19 +93,54 @@ def build_video_prompt(
     script: Mapping[str, Any],
     has_influencer_image: bool = False,
     visual_mode: str = "product_only",
+    *,
+    resolution: str = "1080p",
+    aspect_ratio: str = "9:16",
+    prompt_templates: Mapping[str, str] | None = None,
 ) -> str:
-    """Convert a validated script document using the Colab prompt verbatim."""
-    visibility_prompt = INFLUENCER_VISIBILITY_PROMPT if has_influencer_image else ""
-    generated_model_prompt = (
-        GENERATED_MODEL_PROMPT if visual_mode == "generated_model" else ""
+    """Convert a validated script through one immutable prompt snapshot."""
+    templates = (
+        dict(prompt_templates)
+        if prompt_templates is not None
+        else builtin_prompt_snapshot().templates
     )
-    return (
-        convert_dict_to_formatted_text(script)
-        + "\n\n"
-        + VIDEO_CONDITION_PROMPT
-        + visibility_prompt
-        + generated_model_prompt
-    )
+    common_values = {
+        "script_visual_table": convert_dict_to_formatted_text(script),
+        "duration_seconds": _script_duration_for_prompt(script),
+        "resolution": resolution,
+        "aspect_ratio": aspect_ratio,
+        "visual_mode": visual_mode,
+    }
+    parts = [render_prompt_template(templates, "video_base", common_values)]
+    if has_influencer_image:
+        parts.append(
+            render_prompt_template(
+                templates,
+                "video_identity_reference",
+                common_values,
+            )
+        )
+    if visual_mode == "generated_model":
+        parts.append(
+            render_prompt_template(
+                templates,
+                "video_generated_model",
+                common_values,
+            )
+        )
+    return "\n\n".join(part.strip() for part in parts if part.strip())
+
+
+def _script_duration_for_prompt(script: Mapping[str, Any]) -> int | float | str:
+    scenes = script.get("scenes")
+    if not isinstance(scenes, list) or not scenes:
+        return ""
+    last = scenes[-1]
+    time_range = last.get("time_range_sec") if isinstance(last, Mapping) else None
+    if not isinstance(time_range, Mapping):
+        return ""
+    value = time_range.get("end")
+    return value if isinstance(value, (int, float)) else ""
 
 
 def convert_dict_to_formatted_text(data: Mapping[str, Any] | str) -> str:
@@ -303,6 +295,9 @@ class OpenRouterVideoClient:
                 request.script,
                 has_influencer_image=bool(influencer_image_urls),
                 visual_mode=request.visual_mode,
+                resolution=request.resolution,
+                aspect_ratio=request.aspect_ratio,
+                prompt_templates=request.prompt_templates,
             ),
             "duration": duration_seconds,
             "generate_audio": request.generate_audio,

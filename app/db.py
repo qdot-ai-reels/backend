@@ -107,6 +107,10 @@ class GenerationQuoteRow(Base):
     visual_mode: Mapped[str] = mapped_column(String(32))
     resolution: Mapped[str] = mapped_column(String(32))
     model_id: Mapped[str] = mapped_column(String(255))
+    prompt_version_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    prompt_version: Mapped[int | None] = mapped_column(Integer)
+    prompt_version_name: Mapped[str | None] = mapped_column(String(255))
+    prompt_content_sha256: Mapped[str | None] = mapped_column(String(64))
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     rate_per_second_usd: Mapped[float] = mapped_column(Numeric(14, 8))
     minimum_cost_usd: Mapped[float] = mapped_column(Numeric(14, 8))
@@ -147,6 +151,46 @@ class GenerationRequestRow(Base):
     )
 
 
+class PromptVersionRow(Base):
+    """Immutable six-template prompt bundle."""
+
+    __tablename__ = "prompt_versions"
+
+    bundle_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str] = mapped_column(Text, default="")
+    templates_json: Mapped[str] = mapped_column(Text)
+    content_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class ActivePromptVersionRow(Base):
+    """Singleton active pointer updated in the activation-audit transaction."""
+
+    __tablename__ = "active_prompt_version"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    bundle_id: Mapped[str] = mapped_column(String(64), index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class PromptActivationAuditRow(Base):
+    """Append-only evidence for every active prompt pointer change."""
+
+    __tablename__ = "prompt_activation_audits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    bundle_id: Mapped[str] = mapped_column(String(64), index=True)
+    activated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+
+
 def get_engine():
     from app.core.config import settings
 
@@ -164,6 +208,9 @@ def init_db() -> None:
     inspector = inspect(engine)
     generation_job_columns = {
         column["name"] for column in inspector.get_columns("generation_jobs")
+    }
+    generation_quote_columns = {
+        column["name"] for column in inspector.get_columns("generation_quotes")
     }
     columns = {column["name"] for column in inspector.get_columns("global_settings")}
     missing_columns = {
@@ -207,6 +254,25 @@ def init_db() -> None:
             connection.execute(
                 text("ALTER TABLE generation_jobs ADD COLUMN request_hash VARCHAR(64)")
             )
+        quote_prompt_columns = {
+            "prompt_version_id": "VARCHAR(64)",
+            "prompt_version": "INTEGER",
+            "prompt_version_name": "VARCHAR(255)",
+            "prompt_content_sha256": "VARCHAR(64)",
+        }
+        for name, column_type in quote_prompt_columns.items():
+            if name not in generation_quote_columns:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE generation_quotes ADD COLUMN {name} {column_type}"
+                    )
+                )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_generation_quotes_prompt_version_id "
+                "ON generation_quotes (prompt_version_id)"
+            )
+        )
         connection.execute(
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS "
@@ -288,6 +354,12 @@ def init_db() -> None:
                     "WHERE max_retries IS NOT NULL"
                 )
             )
+
+    # Import lazily to keep the DB model module free of an import cycle. Missing
+    # or invalid resource files intentionally fail application startup.
+    from app.prompt_versions import seed_builtin_prompt_version
+
+    seed_builtin_prompt_version(bind=engine)
 
 
 class SQLAlchemySettingsRepository(SettingsRepository):

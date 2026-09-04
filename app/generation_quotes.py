@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Mapping
@@ -45,9 +45,13 @@ class QuoteSpec:
     candidate_count: int
     visual_mode: str
     resolution: str
+    prompt_version_id: str | None = None
+    prompt_version: int | None = None
+    prompt_version_name: str | None = None
+    prompt_content_sha256: str | None = None
 
     def canonical_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "template_id": self.template_id,
             "template_version": self.template_version,
             "duration_seconds": self.duration_seconds,
@@ -55,6 +59,24 @@ class QuoteSpec:
             "visual_mode": self.visual_mode,
             "resolution": self.resolution,
         }
+        prompt_fields = (
+            self.prompt_version_id,
+            self.prompt_version,
+            self.prompt_version_name,
+            self.prompt_content_sha256,
+        )
+        if any(value is not None for value in prompt_fields):
+            if any(value is None for value in prompt_fields):
+                raise GenerationQuoteError(
+                    "prompt version 견적 메타데이터가 완전하지 않습니다."
+                )
+            payload["prompt_version"] = {
+                "id": self.prompt_version_id,
+                "version": self.prompt_version,
+                "name": self.prompt_version_name,
+                "content_sha256": self.prompt_content_sha256,
+            }
+        return payload
 
     @property
     def request_hash(self) -> str:
@@ -139,6 +161,10 @@ def create_generation_quote(
         visual_mode=spec.visual_mode,
         resolution=spec.resolution,
         model_id=model_id,
+        prompt_version_id=spec.prompt_version_id,
+        prompt_version=spec.prompt_version,
+        prompt_version_name=spec.prompt_version_name,
+        prompt_content_sha256=spec.prompt_content_sha256,
         currency="USD",
         rate_per_second_usd=_money(expected_rate),
         minimum_cost_usd=_money(minimum_rate * units),
@@ -172,6 +198,7 @@ def validate_generation_quote(
     spec: QuoteSpec,
     *,
     model_id: str | None = None,
+    prompt_version_id: str | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     quote = get_generation_quote(quote_id)
@@ -180,7 +207,27 @@ def validate_generation_quote(
     current_time = _as_utc(now or datetime.now(timezone.utc))
     if _as_utc(quote.expires_at) <= current_time:
         raise GenerationQuoteExpiredError("비용 견적이 만료되었습니다. 다시 계산해 주세요.")
-    if quote.request_hash != spec.request_hash or (
+    if (
+        not quote.prompt_version_id
+        or quote.prompt_version is None
+        or not quote.prompt_version_name
+        or not quote.prompt_content_sha256
+    ):
+        raise GenerationQuoteMismatchError(
+            "이 견적에는 production prompt version이 고정되어 있지 않습니다. 다시 계산해 주세요."
+        )
+    if prompt_version_id is not None and quote.prompt_version_id != prompt_version_id:
+        raise GenerationQuoteMismatchError(
+            "견적의 prompt version과 생성 요청의 prompt version이 다릅니다. 다시 계산해 주세요."
+        )
+    quoted_spec = replace(
+        spec,
+        prompt_version_id=quote.prompt_version_id,
+        prompt_version=quote.prompt_version,
+        prompt_version_name=quote.prompt_version_name,
+        prompt_content_sha256=quote.prompt_content_sha256,
+    )
+    if quote.request_hash != quoted_spec.request_hash or (
         model_id is not None and quote.model_id != model_id
     ):
         raise GenerationQuoteMismatchError(
@@ -197,6 +244,19 @@ def quote_to_public(row: GenerationQuoteRow) -> dict[str, Any]:
     maximum_total = Decimal(str(row.maximum_cost_usd))
     minimum_rate = minimum_total / Decimal(quantity_seconds)
     maximum_rate = maximum_total / Decimal(quantity_seconds)
+    prompt_version = None
+    if (
+        row.prompt_version_id
+        and row.prompt_version is not None
+        and row.prompt_version_name
+        and row.prompt_content_sha256
+    ):
+        prompt_version = {
+            "id": row.prompt_version_id,
+            "version": row.prompt_version,
+            "name": row.prompt_version_name,
+            "content_sha256": row.prompt_content_sha256,
+        }
     return {
         "quote_id": row.quote_id,
         "template": {
@@ -207,6 +267,7 @@ def quote_to_public(row: GenerationQuoteRow) -> dict[str, Any]:
         "candidate_count": row.candidate_count,
         "visual_mode": row.visual_mode,
         "model": {"id": row.model_id, "resolution": row.resolution},
+        "prompt_version": prompt_version,
         "currency": row.currency,
         "line_items": [
             {

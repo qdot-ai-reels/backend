@@ -44,6 +44,10 @@ class GenerationQuoteTests(unittest.TestCase):
             candidate_count=2,
             visual_mode="generated_model",
             resolution="1080p",
+            prompt_version_id="production-v1",
+            prompt_version=1,
+            prompt_version_name="Production v1",
+            prompt_content_sha256="a" * 64,
         )
 
     def tearDown(self):
@@ -123,6 +127,48 @@ class GenerationQuoteTests(unittest.TestCase):
                 model_id="different/model",
                 now=self.now,
             )
+
+    def test_quote_hash_and_public_response_pin_prompt_version(self):
+        result = create_generation_quote(
+            self.spec,
+            model_id="bytedance/seedance-2.0",
+            now=self.now,
+        )
+
+        self.assertEqual(
+            result["prompt_version"],
+            {
+                "id": "production-v1",
+                "version": 1,
+                "name": "Production v1",
+                "content_sha256": "a" * 64,
+            },
+        )
+        with self.assertRaises(GenerationQuoteMismatchError):
+            validate_generation_quote(
+                result["quote_id"],
+                self.spec,
+                prompt_version_id="different-version",
+                now=self.now,
+            )
+
+    def test_legacy_quote_without_prompt_pin_requires_requote(self):
+        legacy_spec = QuoteSpec(
+            template_id="ugc_quick_4",
+            template_version=1,
+            duration_seconds=4,
+            candidate_count=1,
+            visual_mode="product_only",
+            resolution="1080p",
+        )
+        result = create_generation_quote(
+            legacy_spec,
+            model_id="bytedance/seedance-2.0",
+            now=self.now,
+        )
+
+        with self.assertRaises(GenerationQuoteMismatchError):
+            validate_generation_quote(result["quote_id"], legacy_spec, now=self.now)
 
 
 if __name__ == "__main__":

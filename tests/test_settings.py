@@ -400,7 +400,34 @@ class DatabaseLifecycleTests(unittest.IsolatedAsyncioTestCase):
             }.issubset(generation_indexes)
         )
         self.assertIn("generation_requests", inspect(engine).get_table_names())
+        self.assertTrue(
+            {
+                "prompt_versions",
+                "active_prompt_version",
+                "prompt_activation_audits",
+            }.issubset(inspect(engine).get_table_names())
+        )
+        quote_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("generation_quotes")
+        }
+        self.assertTrue(
+            {
+                "prompt_version_id",
+                "prompt_version",
+                "prompt_version_name",
+                "prompt_content_sha256",
+            }.issubset(quote_columns)
+        )
         with engine.connect() as connection:
+            seeded_prompt = connection.execute(
+                text(
+                    "SELECT p.bundle_id, p.version, a.bundle_id "
+                    "FROM prompt_versions p "
+                    "JOIN active_prompt_version a ON a.bundle_id = p.bundle_id"
+                )
+            ).one()
+            self.assertEqual(seeded_prompt, ("production-v1", 1, "production-v1"))
             row = connection.execute(
                 text(
                     "SELECT video_min_resolution, video_max_resolution, "

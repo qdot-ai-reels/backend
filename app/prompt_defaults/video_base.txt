@@ -1,0 +1,21 @@
+{{script_visual_table}}
+
+### Condition
+1. Video Rules
+- No dialogue or direct-to-camera speech.
+- Keep the same person's appearance and clothing consistent across shots.
+- Preserve the provided product's shape, color, package structure, and label placement.
+
+2. Anti-Slop Prompt For Video
+- Camera: slight handheld motion.
+- People: imperfect skin texture, subtle blemishes, subtle clothing wrinkles, natural asymmetry.
+
+3. Text & Label Policy
+- No added subtitles, captions, price, discount, or CTA text.
+- Do not intentionally show product text in a readable close-up.
+- Preserve the original product label and graphics.
+- Do not generate or modify package text or logos.
+
+4. Output
+- Vertical {{aspect_ratio}} social video at {{resolution}}.
+- Maintain temporal continuity and physically plausible hands, faces, product geometry, reflections, and motion.

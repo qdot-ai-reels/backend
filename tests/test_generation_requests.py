@@ -23,6 +23,7 @@ from app.generation_jobs import (
     reserve_generation_request,
 )
 from app.generation_quotes import canonical_request_hash
+from app.prompt_versions import builtin_prompt_snapshot
 
 
 class GenerationRequestLookupTests(unittest.TestCase):
@@ -44,6 +45,11 @@ class GenerationRequestLookupTests(unittest.TestCase):
             self.session_local,
         )
         self.session_patch.start()
+        self.prompt_snapshot_patch = patch(
+            "app.api.v1.final_generation._load_quoted_prompt_snapshot",
+            return_value=builtin_prompt_snapshot(),
+        )
+        self.prompt_snapshot_patch.start()
         self.app = FastAPI()
         self.app.include_router(router)
 
@@ -66,6 +72,7 @@ class GenerationRequestLookupTests(unittest.TestCase):
         return canonical_request_hash(payload)
 
     def tearDown(self):
+        self.prompt_snapshot_patch.stop()
         self.session_patch.stop()
         self.engine.dispose()
         self.directory.cleanup()

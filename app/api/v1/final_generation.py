@@ -14,6 +14,7 @@ from typing import Any, Literal
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Header,
     HTTPException,
     Path as ApiPath,
     Query,
@@ -55,6 +56,14 @@ from app.generation_quotes import (
     create_generation_quote,
     validate_generation_quote,
 )
+from app.prompt_versions import (
+    ActivePromptVersionMissingError,
+    PromptBundleSnapshot,
+    PromptRenderError,
+    get_active_prompt_version,
+    get_prompt_version,
+    render_creative_brief,
+)
 from app.generation_templates import (
     GenerationTemplateError,
     get_generation_template,
@@ -77,6 +86,7 @@ from app.runtime_config import (
     resolve_script_generation_duration,
 )
 from app.script_generator import (
+    DEFAULT_CTA_ACTION,
     DEFAULT_SYLLABLES_PER_SECOND,
     ScriptDialogueLengthError,
     ScriptGenerationRequest,
@@ -124,6 +134,18 @@ def _script_duration_seconds(script: dict[str, Any]) -> int | None:
     return duration if 1 <= duration <= 30 else None
 
 
+class CreativeBriefBody(BaseModel):
+    advertising_purpose: str | None = Field(default=None, max_length=1000)
+    cta: str | None = Field(default=None, max_length=500)
+    visual_mode: Literal[
+        "product_only", "model_included", "generated_model"
+    ] | None = None
+    channel: str | None = Field(default=None, min_length=1, max_length=200)
+    must_include: str | None = Field(default=None, max_length=2000)
+    must_exclude: str | None = Field(default=None, max_length=2000)
+    extra_details: str | None = Field(default=None, max_length=4000)
+
+
 class FinalGenerationBody(BaseModel):
     """Accept product context together with the script to be rendered."""
 
@@ -139,6 +161,7 @@ class FinalGenerationBody(BaseModel):
     must_include: str | None = Field(default=None, max_length=2000)
     must_exclude: str | None = Field(default=None, max_length=2000)
     extra_details: str | None = Field(default=None, max_length=4000)
+    creative_brief: CreativeBriefBody | None = None
     max_duration_seconds: int | None = Field(default=None, ge=1, le=30)
     channel: str = "Instagram Reels"
     target_audience: str = "육아에 관심 있는 보호자"
@@ -146,6 +169,7 @@ class FinalGenerationBody(BaseModel):
     template_id: str | None = Field(default=None, min_length=1, max_length=64)
     template_version: int | None = Field(default=None, ge=1)
     quote_id: str | None = Field(default=None, min_length=1, max_length=64)
+    prompt_version_id: str | None = Field(default=None, min_length=1, max_length=64)
     client_request_id: str | None = Field(default=None, min_length=1, max_length=128)
     resolution: Literal["1080p"] = "1080p"
     visual_mode: Literal[
@@ -158,9 +182,13 @@ class FinalGenerationBody(BaseModel):
         if self.script is None and self.template_id is None:
             raise ValueError("script 또는 template_id 중 하나가 필요합니다.")
         if self.template_id is None and (
-            self.template_version is not None or self.quote_id is not None
+            self.template_version is not None
+            or self.quote_id is not None
+            or self.prompt_version_id is not None
         ):
-            raise ValueError("template_version과 quote_id는 template_id와 함께 사용해야 합니다.")
+            raise ValueError(
+                "template_version, quote_id, prompt_version_id는 template_id와 함께 사용해야 합니다."
+            )
         if self.template_id is not None:
             if self.quote_id is None or not self.quote_id.strip():
                 raise ValueError("template_id 생성에는 quote_id가 필요합니다.")
@@ -177,6 +205,7 @@ class GenerationQuoteBody(BaseModel):
         "product_only", "model_included", "generated_model"
     ] = "generated_model"
     resolution: Literal["1080p"] = "1080p"
+    prompt_version_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 @router.get(
@@ -204,6 +233,21 @@ def create_quote(body: GenerationQuoteBody) -> dict[str, Any]:
             duration_seconds=template.duration_seconds,
             resolution=body.resolution,
         )
+        prompt_version = get_active_prompt_version()
+        if (
+            body.prompt_version_id is not None
+            and body.prompt_version_id != prompt_version.id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "PROMPT_VERSION_CHANGED",
+                    "message": (
+                        "활성 prompt version이 변경되었습니다. 설정을 다시 불러온 뒤 "
+                        "견적을 다시 계산해 주세요."
+                    ),
+                },
+            )
         return create_generation_quote(
             QuoteSpec(
                 template_id=template.template_id,
@@ -212,9 +256,21 @@ def create_quote(body: GenerationQuoteBody) -> dict[str, Any]:
                 candidate_count=body.candidate_count,
                 visual_mode=body.visual_mode,
                 resolution=body.resolution,
+                prompt_version_id=prompt_version.id,
+                prompt_version=prompt_version.version,
+                prompt_version_name=prompt_version.name,
+                prompt_content_sha256=prompt_version.content_sha256,
             ),
             model_id=model_id,
         )
+    except ActivePromptVersionMissingError as error:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "ACTIVE_PROMPT_VERSION_MISSING",
+                "message": str(error),
+            },
+        ) from error
     except (GenerationTemplateError, GenerationQuoteError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -471,12 +527,126 @@ def _existing_reservation_response(
     return None
 
 
+def _load_quoted_prompt_snapshot(quote: dict[str, Any]) -> PromptBundleSnapshot:
+    metadata = quote.get("prompt_version")
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("id"), str):
+        raise GenerationQuoteMismatchError(
+            "견적에 production prompt version이 없습니다. 다시 계산해 주세요."
+        )
+    snapshot = get_prompt_version(metadata["id"])
+    if snapshot is None:
+        raise GenerationQuoteMismatchError(
+            "견적에 고정된 prompt version을 찾을 수 없습니다. 다시 계산해 주세요."
+        )
+    expected = snapshot.metadata()
+    if any(metadata.get(key) != expected[key] for key in expected):
+        raise GenerationQuoteMismatchError(
+            "견적에 고정된 prompt version의 무결성을 확인하지 못했습니다. 다시 계산해 주세요."
+        )
+    return snapshot
+
+
+def _render_studio_creative_brief(
+    snapshot: PromptBundleSnapshot,
+    payload: dict[str, Any],
+    *,
+    duration_seconds: int,
+) -> str:
+    return render_creative_brief(
+        snapshot.templates,
+        advertising_purpose=(
+            payload.get("advertising_purpose")
+            if isinstance(payload.get("advertising_purpose"), str)
+            else None
+        ),
+        cta=(
+            payload.get("cta")
+            if isinstance(payload.get("cta"), str) and payload["cta"].strip()
+            else DEFAULT_CTA_ACTION
+        ),
+        visual_mode=str(payload.get("visual_mode") or "product_only"),
+        must_include=(
+            payload.get("must_include")
+            if isinstance(payload.get("must_include"), str)
+            else None
+        ),
+        must_exclude=(
+            payload.get("must_exclude")
+            if isinstance(payload.get("must_exclude"), str)
+            else None
+        ),
+        extra_details=(
+            payload.get("extra_details")
+            if isinstance(payload.get("extra_details"), str)
+            else None
+        ),
+        common_values={
+            "channel": payload.get("channel", "Instagram Reels"),
+            "target_audience": payload.get(
+                "target_audience", "육아에 관심 있는 보호자"
+            ),
+            "duration_seconds": duration_seconds,
+        },
+    )
+
+
+def _canonicalize_creative_brief_options(
+    body: FinalGenerationBody,
+    payload: dict[str, Any],
+) -> None:
+    """Apply nested FE controls after durable reservation ownership is acquired."""
+    nested = body.creative_brief
+    if nested is None:
+        return
+    for field_name in (
+        "advertising_purpose",
+        "cta",
+        "visual_mode",
+        "channel",
+        "must_include",
+        "must_exclude",
+        "extra_details",
+    ):
+        if field_name not in nested.model_fields_set:
+            continue
+        nested_value = getattr(nested, field_name)
+        if field_name == "channel" and nested_value is None:
+            raise ValueError("creative_brief.channel은 비어 있을 수 없습니다.")
+        if (
+            field_name in body.model_fields_set
+            and getattr(body, field_name) != nested_value
+        ):
+            raise ValueError(
+                f"creative_brief.{field_name}와 top-level {field_name} 값이 다릅니다."
+            )
+        payload[field_name] = nested_value
+
+
 @router.post("/generate", status_code=status.HTTP_202_ACCEPTED, summary="상품 데이터와 스크립트로 전체 릴스 생성 작업 시작")
-def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTasks) -> dict[str, Any]:
+def start_generation(
+    body: FinalGenerationBody,
+    background_tasks: BackgroundTasks,
+    idempotency_key: str | None = Header(
+        default=None,
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=128,
+    ),
+) -> dict[str, Any]:
     # This is the earliest point where FastAPI has produced a trustworthy,
     # canonicalizable body. Schema-level 422 responses happen before this
     # function, so clients must keep the same ID/body while their submit result
     # is uncertain instead of interpreting an unreserved lookup as safe to fork.
+    if idempotency_key is not None and idempotency_key != body.client_request_id:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "IDEMPOTENCY_KEY_MISMATCH",
+                "message": (
+                    "Idempotency-Key header는 body.client_request_id와 같아야 합니다."
+                ),
+            },
+        )
     reservation = None
     reservation_hash = None
     if body.client_request_id:
@@ -491,6 +661,17 @@ def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTask
         if existing_response is not None:
             return existing_response
 
+    if body.template_id and body.prompt is not None and body.prompt.strip():
+        _persist_rejection_and_raise(
+            reservation,
+            status_code=422,
+            code="REQUEST_VALIDATION_FAILED",
+            message=(
+                "template_id 생성에는 자유 형식 prompt를 사용할 수 없습니다. "
+                "구조화된 제작 옵션을 사용해 주세요."
+            ),
+        )
+
     job_id = uuid.uuid4().hex
     input_type = "product_template" if body.script is None else "product_and_script"
     image_url = body.image_url or _extract_image_url(body.product)
@@ -503,6 +684,7 @@ def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTask
         )
     payload = body.model_dump()
     try:
+        _canonicalize_creative_brief_options(body, payload)
         template = (
             get_generation_template(body.template_id, body.template_version)
             if body.template_id
@@ -592,7 +774,19 @@ def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTask
                 body.quote_id,
                 spec,
                 model_id=_selected_video_model_id(),
+                prompt_version_id=body.prompt_version_id,
             )
+            prompt_snapshot = _load_quoted_prompt_snapshot(payload["quote"])
+            payload["prompt_version"] = prompt_snapshot.metadata()
+            payload["prompt_templates"] = dict(prompt_snapshot.templates)
+            payload["creative_brief"] = _render_studio_creative_brief(
+                prompt_snapshot,
+                payload,
+                duration_seconds=template.duration_seconds,
+            )
+            # The Studio workflow accepts only structured creative controls.
+            # A legacy free-form FE prompt must never replace versioned policy.
+            payload["prompt"] = None
         except GenerationQuoteExpiredError as error:
             _persist_rejection_and_raise(
                 reservation,
@@ -612,6 +806,13 @@ def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTask
                 reservation,
                 status_code=404,
                 code="QUOTE_NOT_FOUND",
+                message=str(error),
+            )
+        except (ActivePromptVersionMissingError, PromptRenderError) as error:
+            _persist_rejection_and_raise(
+                reservation,
+                status_code=409,
+                code="REQUOTE_REQUIRED",
                 message=str(error),
             )
 
@@ -733,6 +934,11 @@ def _generation_start_response(
             "total": payload["quote"].get("total"),
             "coverage": payload["quote"].get("coverage"),
         }
+    if isinstance(payload.get("prompt_version"), dict):
+        response["prompt_version"] = {
+            key: payload["prompt_version"].get(key)
+            for key in ("id", "version", "name", "content_sha256")
+        }
     return response
 
 
@@ -748,6 +954,8 @@ def _generation_replay_response(
             replay_payload["template"] = job["template"]
         if isinstance(job.get("quote"), dict):
             replay_payload["quote"] = job["quote"]
+        if isinstance(job.get("prompt_version"), dict):
+            replay_payload["prompt_version"] = job["prompt_version"]
     response = _generation_start_response(
         job_id,
         int((job.get("candidate_count") if job else None) or candidate_count),
@@ -1128,6 +1336,11 @@ def _run_candidate(
                 if isinstance(payload.get("resolution"), str)
                 else None
             ),
+            prompt_templates=(
+                payload["prompt_templates"]
+                if isinstance(payload.get("prompt_templates"), dict)
+                else None
+            ),
         )
         raw_provider_validation = getattr(video_result, "provider_validation", None)
         if not isinstance(raw_provider_validation, ValidationResult):
@@ -1448,13 +1661,13 @@ def _generate_script(
             or (service.get_runtime_settings().video_max_duration_seconds if service else 15),
             service,
         )
-    custom_prompt = payload.get("prompt")
-    retry_instruction = None
-    if retry_error is not None:
-        retry_instruction = (
-            f"기존 스크립트의 TTS 검증 실패 사유는 다음과 같습니다: {retry_error}. "
-            "해당 장면의 voiceover를 줄여 새 스크립트를 생성하세요."
-        )
+    custom_prompt = None if template is not None else payload.get("prompt")
+    prompt_templates = payload.get("prompt_templates")
+    if not isinstance(prompt_templates, dict):
+        prompt_templates = None
+    creative_brief = payload.get("creative_brief")
+    if not isinstance(creative_brief, str):
+        creative_brief = None
     request = ScriptGenerationRequest(
         product=product,
         image_url=payload.get("image_url") or _extract_image_url(raw),
@@ -1464,8 +1677,13 @@ def _generate_script(
         channel=payload.get("channel", "Instagram Reels"),
         target_audience=payload.get("target_audience", "육아에 관심 있는 보호자"),
         supported_video_durations=supported_durations,
-        retry_instruction=retry_instruction,
+        retry_error=str(retry_error) if retry_error is not None else None,
         template_scene_plan=(template.prompt_scene_plan() if template else None),
+        prompt_templates=prompt_templates,
+        creative_brief=creative_brief,
+        resolution=str(payload.get("resolution") or "1080p"),
+        aspect_ratio="9:16",
+        visual_mode=str(payload.get("visual_mode") or "product_only"),
     )
     client = build_script_client(service)
     generated = client.generate_script(
@@ -1496,6 +1714,7 @@ def _generate_video(
     square_output_strategy: str = SquareOutputStrategy.REJECT.value,
     visual_mode: str = "product_only",
     resolution: str | None = None,
+    prompt_templates: dict[str, str] | None = None,
 ):
     influencer_image_urls = (
         influencer_image_url
@@ -1540,6 +1759,7 @@ def _generate_video(
         influencer_image_urls=influencer_image_urls,
         detail_image_urls=detail_image_urls,
         visual_mode=visual_mode,
+        prompt_templates=prompt_templates,
     )
     # Candidate diversity replaces invisible provider retries. A failed
     # candidate is retried only through the explicit retry endpoint.

@@ -1,0 +1,6 @@
+Use the provided AI-generated person image only as the character identity reference.
+Use the provided person image as the character reference. The person in the image was generated using AI.
+Front-facing appearance is not required.
+The AI influencer must be clearly visible on screen.
+The referenced presenter must be clearly visible on screen; do not replace the presenter with only a hand, finger, or off-screen action.
+Keep the same face, hair, outfit, body proportions, and skin tone throughout the clip without reconstructing a real person.

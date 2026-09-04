@@ -8,6 +8,68 @@ work that still has to be completed before multi-instance deployment.
 
 All routes use the existing `/api/v1/reels` prefix.
 
+### `GET/POST /prompt-versions` and `POST /prompt-versions/{id}/activate`
+
+Prompt policy is stored as immutable bundles. Every bundle contains exactly six
+templates: `script_generation`, `script_tts_repair`, `video_base`,
+`video_identity_reference`, `video_generated_model`, and `creative_brief`.
+Startup seeds and activates `production-v1` from the source-controlled files in
+`app/prompt_defaults`. Concurrent application bootstrap is idempotent; the
+singleton active pointer and append-only activation audit are committed in the
+same transaction. If versions exist but the active pointer is missing or a
+stored content hash fails verification, Studio fails closed instead of silently
+selecting a prompt.
+
+`GET /prompt-versions` returns:
+
+```json
+{
+  "active_bundle_id": "production-v1",
+  "versions": [
+    {
+      "id": "production-v1",
+      "version": 1,
+      "name": "Production v1",
+      "description": "...",
+      "content_sha256": "...",
+      "created_at": "...",
+      "activated_at": "...",
+      "is_active": true,
+      "templates": {"script_generation": "..."}
+    }
+  ]
+}
+```
+
+`POST /prompt-versions` accepts `name`, `description`, and the complete
+`templates` object and returns the newly saved version object with HTTP 201.
+There is no edit or delete route. Activation returns the updated catalog.
+These settings endpoints are the only public API that returns full template
+text, and route responses use `Cache-Control: no-store`. They make no provider
+request. If concurrent writers allocate the same next numeric version, the
+losing save returns 409 `PROMPT_VERSION_CONFLICT` and can be retried safely.
+
+Placeholders use `{{token}}`; whitespace such as `{{ product_context }}` is
+also accepted. Missing required placeholders, per-template unknown tokens,
+malformed braces, an individual template over 64 KiB, or a bundle over 256 KiB
+returns 422. The required tokens are:
+
+- `script_generation`: `product_context`, `creative_brief`,
+  `template_scene_plan`
+- `script_tts_repair`: `retry_error`
+- `video_base`: `script_visual_table`
+- `creative_brief`: `advertising_purpose`, `cta`, `visual_mode`
+- identity-reference and generated-model templates have no required token
+
+The runtime supplies every optional token allowed for each template. Studio
+creative values are JSON-escaped and inserted in one render pass inside an
+`untrusted-creative-brief-data` delimiter, so token-shaped user input is not
+evaluated as template syntax. All model-facing instructions and delimiters live
+in the six immutable templates; Python only serializes product fields, the
+selected scene plan, and the script visual table into data placeholders. Prompt
+instructions do not replace the existing code-level product, schema,
+exact-timeline, dialogue-length, image, and final video validators.
+
 ### `GET /generation-templates`
 
 Returns the four server-owned, versioned script strategies. The scene count,
@@ -67,9 +129,17 @@ returns `VIDEO_MODEL_UNSUPPORTED` with HTTP 422 and no quote is created.
   "template_version": 1,
   "candidate_count": 1,
   "visual_mode": "generated_model",
-  "resolution": "1080p"
+  "resolution": "1080p",
+  "prompt_version_id": "production-v1"
 }
 ```
+
+`prompt_version_id` is optional for older callers. When supplied, it must still
+be the active version or the endpoint returns HTTP 409
+`PROMPT_VERSION_CHANGED`. Every newly issued quote pins the active prompt
+version ID, number, name, and content SHA-256 in both its request hash and its
+public `prompt_version` metadata. Quotes created before this pin existed are not
+safe for Studio generation and return `REQUOTE_REQUIRED`.
 
 The default configured video rate is `$0.38 / second / candidate` and can be
 changed with `VIDEO_RATE_PER_SECOND_USD`. The lower and upper range use
@@ -81,8 +151,9 @@ The response contains `line_items`, `total.min`, `total.expected`, `total.max`,
 `created_at`, `expires_at`, and the selected model snapshot. `coverage` is
 explicitly `video_only`: script generation, TTS, rendering, and a user-triggered
 paid retry are not represented as if they were free or known. Automatic paid
-video retry remains zero. `total.max` is the configured rate card's upper
-estimate shown at confirmation; it is not a provider-account hard spending cap.
+video retry remains zero. `total.max` is the user-approved upper estimate for
+that generation click and the configured rate card's upper value shown at
+confirmation; it is not a provider-account hard spending cap.
 Changing any quoted input requires a new quote.
 
 ### `POST /generate`
@@ -96,10 +167,20 @@ send a template without a script:
   "template_id": "ugc_full_15",
   "template_version": 1,
   "quote_id": "persisted-quote-id",
+  "prompt_version_id": "production-v1",
   "client_request_id": "one-browser-submit-id",
   "candidate_count": 1,
   "visual_mode": "generated_model",
-  "resolution": "1080p"
+  "resolution": "1080p",
+  "creative_brief": {
+    "advertising_purpose": "상품 인지도",
+    "cta": "링크 확인",
+    "visual_mode": "generated_model",
+    "channel": "Instagram Reels",
+    "must_include": "상품 사용 장면",
+    "must_exclude": "검증되지 않은 수량",
+    "extra_details": "차분한 주방"
+  }
 }
 ```
 
@@ -107,6 +188,14 @@ Every request containing `template_id` must include both `quote_id` and
 `client_request_id`. This makes the non-legacy Studio path explicitly budgeted
 and idempotent. The legacy product-and-script request without `template_id`
 remains valid and defaults to one candidate.
+
+The nested `creative_brief` is authoritative for fields it contains. Existing
+top-level controls remain accepted; if both shapes explicitly provide a field,
+their values must match. This semantic check occurs after the durable request
+reservation, so a mismatch is recorded as a definitive rejected request.
+Non-empty legacy `prompt` text is rejected on the template path after the same
+reservation; only the legacy non-template route may use free-form constraints
+with the bundled prompt fallback.
 
 The accepted combinations are:
 
@@ -122,8 +211,9 @@ The prompt also prohibits inventing package quantity, count, fine print, or
 label numbers unless the product payload explicitly marks those claims as
 verified.
 
-`quote_id` must be unexpired and match template version,
-duration, candidate count, visual mode, resolution, and the selected video model.
+`quote_id` must be unexpired and match template version, duration, candidate
+count, visual mode, resolution, selected video model, and the requested prompt
+version when present.
 A stale or changed quote returns 409. A missing quote returns 404. The quoted
 resolution snapshot is passed to the provider request instead of being replaced
 by later runtime settings.
@@ -132,6 +222,23 @@ by later runtime settings.
 request returns the first job with `idempotent_replay: true` and does not enqueue
 another generation. Reusing the key for a changed body returns 409. The database
 enforces a unique index in addition to the request-path lookup.
+
+Clients may also send `Idempotency-Key`. When present it must exactly equal
+`body.client_request_id`; a mismatch returns 422
+`IDEMPOTENCY_KEY_MISMATCH` before reserving either contradictory key. Omitting
+the header preserves the body-key contract. Schema-level Pydantic failures also
+happen before the route can safely reserve a parsed body, so an uncertain
+client must retry the exact same body and ID rather than minting a new one
+solely because lookup is empty.
+
+The quote is authoritative for prompt selection. On acceptance the private job
+payload stores the exact six-template snapshot plus public prompt metadata.
+Later activation cannot change a quoted job, TTS repair, or candidate retry.
+Start, replay, list, and detail responses expose only `{id, version, name,
+content_sha256}` and never template text. Script generation uses the pinned
+`script_generation`; TTS overflow regeneration uses pinned
+`script_tts_repair`; video generation selects the pinned base and visual-mode
+template.
 
 ### `GET /generations`
 
@@ -198,6 +305,12 @@ Before multi-instance or zero-downtime production deployment:
 6. Add Korean word-level forced-alignment evidence. The current continuous TTS
    preserves natural prosody and fits the total voiced window, but it does not
    independently prove every internal phrase boundary against its caption.
+7. Add authenticated operator authorization for prompt settings and owner-scope
+   generation jobs/requests before exposing these routes on a public network.
+8. Add retention/tombstone policy for prompt activation audits, generation
+   request reservations, quotes, and private prompt snapshots.
+9. Split the prompt settings catalog into paginated metadata and a single-version
+   template detail endpoint before the number of 256 KiB bundles grows materially.
 
 These deferred items are intentionally not described as completed by the P0/P1
 contract.

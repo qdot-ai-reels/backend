@@ -19,6 +19,7 @@ from app.generation_jobs import (
     GenerationRequestReservation,
 )
 from app.generation_templates import get_generation_template
+from app.prompt_versions import builtin_prompt_snapshot
 from app.script_generator import ScriptGenerationRequest, build_script_prompt
 from app.settings_service import ProviderCatalogError, VideoModelCapabilities
 from app.video_generator import OpenRouterVideoClient
@@ -66,6 +67,7 @@ def template_script(template_id="ugc_full_15"):
 
 class StudioWorkflowApiTests(unittest.TestCase):
     def setUp(self):
+        self.prompt_snapshot = builtin_prompt_snapshot()
         self.reserve_request_patcher = patch(
             "app.api.v1.final_generation.reserve_generation_request",
             side_effect=lambda client_request_id, request_hash: GenerationRequestReservation(
@@ -80,8 +82,20 @@ class StudioWorkflowApiTests(unittest.TestCase):
             "app.api.v1.final_generation.reject_generation_request",
             return_value=True,
         )
+        self.active_prompt_patcher = patch(
+            "app.api.v1.final_generation.get_active_prompt_version",
+            return_value=self.prompt_snapshot,
+        )
+        self.quoted_prompt_patcher = patch(
+            "app.api.v1.final_generation._load_quoted_prompt_snapshot",
+            return_value=self.prompt_snapshot,
+        )
         self.reserve_request = self.reserve_request_patcher.start()
         self.reject_request = self.reject_request_patcher.start()
+        self.active_prompt_patcher.start()
+        self.quoted_prompt_patcher.start()
+        self.addCleanup(self.quoted_prompt_patcher.stop)
+        self.addCleanup(self.active_prompt_patcher.stop)
         self.addCleanup(self.reject_request_patcher.stop)
         self.addCleanup(self.reserve_request_patcher.stop)
 

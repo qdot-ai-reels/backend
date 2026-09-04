@@ -720,6 +720,7 @@ def _job_summary(row: GenerationJobRow) -> dict[str, Any]:
         "status": row.status,
         "stage": row.stage,
         "template": template,
+        "prompt_version": _prompt_version_summary(payload),
         "duration_seconds": template.get("duration_seconds") if template else _script_duration(script),
         "visual_mode": _visual_provenance(row.payload_json).get("visual_mode", "product_only"),
         "candidates": {
@@ -920,7 +921,37 @@ def _workflow_provenance(payload_json: str | None) -> dict[str, Any]:
             "coverage": quote.get("coverage"),
             "expires_at": quote.get("expires_at"),
         }
+    prompt_version = _prompt_version_summary(payload)
+    if prompt_version is not None:
+        result["prompt_version"] = prompt_version
     return result
+
+
+def _prompt_version_summary(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Expose immutable version metadata, never the private template snapshot."""
+    metadata = payload.get("prompt_version")
+    if not isinstance(metadata, dict):
+        quote = payload.get("quote")
+        metadata = quote.get("prompt_version") if isinstance(quote, dict) else None
+    if not isinstance(metadata, dict):
+        return None
+    bundle_id = metadata.get("id")
+    version = metadata.get("version")
+    name = metadata.get("name")
+    content_sha256 = metadata.get("content_sha256")
+    if (
+        not isinstance(bundle_id, str)
+        or not isinstance(version, int)
+        or not isinstance(name, str)
+        or not isinstance(content_sha256, str)
+    ):
+        return None
+    return {
+        "id": bundle_id,
+        "version": version,
+        "name": name,
+        "content_sha256": content_sha256,
+    }
 
 
 def _options_summary(payload_json: str | None) -> dict[str, Any]:
