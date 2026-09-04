@@ -552,7 +552,20 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("카메라를 주시하며 말하지 않는다", prompt)
         self.assertIn("같은 인물의 얼굴, 헤어스타일, 의상이 장면마다 유지", prompt)
         self.assertIn("상품 라벨의 글자와 로고는 식별 가능한 정면 클로즈업으로 보여주지 않는다", prompt)
-        self.assertIn("자막, 가격, 할인율, CTA 문구는 영상에 삽입하지 않는다", prompt)
+        self.assertIn(
+            "영상 생성 모델이 만드는 영상 프레임 안에는 자막, 가격, 할인율, CTA 문구를 직접 삽입하지 않는다",
+            prompt,
+        )
+
+    def test_separates_model_baked_text_from_hyperframes_captions(self):
+        prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
+
+        self.assertIn("영상 생성 모델이 만드는 영상 프레임 안에는", prompt)
+        self.assertIn("HyperFrames가 별도로 추가하는 텍스트 애니메이션용 캡션", prompt)
+        self.assertIn(
+            "subtitle`을 `null`이나 빈 문자열로 반환하지 않는다",
+            prompt,
+        )
 
     def test_includes_all_260830_1_content_rules(self):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
