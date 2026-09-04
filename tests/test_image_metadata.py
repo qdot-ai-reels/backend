@@ -47,6 +47,32 @@ class ImageMetadataTests(unittest.TestCase):
 
         self.assertEqual(result, ("https://example.com/valid-detail.jpg",))
 
+    def test_skips_detail_image_with_extreme_aspect_ratio(self):
+        def read_dimensions(url):
+            if url.endswith("/detail.jpg"):
+                return 1600, 100
+            return 800, 1200
+
+        result = validate_image_inputs(
+            image_url="https://example.com/product.jpg",
+            detail_image_urls=(
+                "https://example.com/detail.jpg",
+                "https://example.com/valid-detail.jpg",
+            ),
+            dimensions_reader=read_dimensions,
+            format_reader=lambda _url: "jpg",
+        )
+
+        self.assertEqual(result, ("https://example.com/valid-detail.jpg",))
+
+    def test_rejects_required_image_with_extreme_aspect_ratio(self):
+        with self.assertRaisesRegex(ValueError, "가로·세로 비율이 너무 큽니다"):
+            validate_image_inputs(
+                image_url="https://example.com/product.jpg",
+                dimensions_reader=lambda _url: (1600, 100),
+                format_reader=lambda _url: "jpg",
+            )
+
     def test_still_rejects_invalid_required_image(self):
         def read_dimensions(url):
             if url.endswith("product.jpg"):
