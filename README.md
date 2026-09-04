@@ -3,6 +3,12 @@
 FastAPI, PostgreSQL, OpenRouter, FFmpeg, HyperFrames로 여러 개의 1080x1920
 릴스 후보를 생성·검수·저장하는 백엔드입니다.
 
+## 설계 문서
+
+- [Production 영상 품질·모션 아키텍처](docs/production-video-quality-and-motion-architecture.ko.md)
+- [Studio production workflow contract](docs/studio-workflow-contract.md)
+- [백엔드 구조와 DB 역할](docs/backend-structure-and-db.md)
+
 ---
 
 ## 📁 프로젝트 구조
