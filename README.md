@@ -30,21 +30,26 @@ backend/
 ### 1. 환경변수
 
 workspace 루트(`reels-george/.env`)의 공용 키 한 개만으로 세 provider client를
-시작할 수 있습니다. 파일을 복사하거나 Git에 추가하지 마세요.
+시작할 수 있습니다. 실제 값이 든 `.env`를 외부로 공유하거나 Git에 추가하지 마세요. 상위
+`tools/start_local_stack.sh`는 루트 `.env`만 shell에 source하므로 이 실행 방식에서
+사용할 용도별 키와 모델 설정도 모두 루트 `.env`에 둡니다.
 
 ```bash
-OPENROUTER_API_KEY=...
+OPENROUTER_API_KEY=
 ```
 
-필요하면 `backend/.env`의 `OPENROUTER_SCRIPT_API_KEY`,
-`OPENROUTER_TTS_API_KEY`, `OPENROUTER_VIDEO_API_KEY`로 용도별 키를 덮어쓸 수
-있습니다. 기본 모델은 `openai/gpt-5.4-mini`, `google/gemini-3.1-flash-tts-preview`,
+필요하면 `OPENROUTER_SCRIPT_API_KEY`, `OPENROUTER_TTS_API_KEY`,
+`OPENROUTER_VIDEO_API_KEY`로 용도별 키를 덮어쓸 수 있습니다. `backend/.env`는
+Docker Compose가 container에 주입하거나 사용자가 명시적으로 source한 실행에서만
+용도별 변수가 process에 들어갑니다. 파일만 만들어 둔 채 direct uvicorn 또는 상위
+통합 script가 자동으로 읽는다고 가정하면 안 됩니다. 기본 모델은
+`openai/gpt-5.4-mini`, `google/gemini-3.1-flash-tts-preview`,
 `bytedance/seedance-2.0`입니다.
 
 ### 2. Docker 컨테이너 실행
 ```bash
 cd backend
-docker compose -p quedot-reels up -d --build
+docker compose --env-file ../.env -p quedot-reels up -d --build
 ```
 
 기본적으로 funded API와 PostgreSQL host port는 각각
@@ -64,17 +69,25 @@ FastAPI가 입력 HTML과 영상을 이 경로에 저장하면 HyperFrames 컨�
 
 ```bash
 # 이미지 빌드 및 전체 서비스 실행
-docker compose -p quedot-reels up -d --build
+docker compose --env-file ../.env -p quedot-reels up -d --build
 
-# composition 검사
+# 실제 runtime/hyperframes 하위의 job project ID를 지정
+export HYPERFRAMES_PROJECT_ID="<actual-project-id>"
+test -d "runtime/hyperframes/$HYPERFRAMES_PROJECT_ID"
+
 # 수동 composition 검사
-docker compose -p quedot-reels run --rm --entrypoint hyperframes hyperframes check /workspace --json
+docker compose --env-file ../.env -p quedot-reels run --rm --entrypoint hyperframes \
+  hyperframes check "/workspace/$HYPERFRAMES_PROJECT_ID" --json --strict
 
-# MP4 렌더링
 # 수동 MP4 렌더링
-docker compose -p quedot-reels run --rm --entrypoint hyperframes hyperframes render /workspace \
-  --output /workspace/output.mp4 --quality high --video-bitrate 10M --fps 30 --strict --workers 1
+docker compose --env-file ../.env -p quedot-reels run --rm --entrypoint hyperframes \
+  hyperframes render "/workspace/$HYPERFRAMES_PROJECT_ID" \
+  --output "/workspace/$HYPERFRAMES_PROJECT_ID/output.mp4" \
+  --quality high --video-bitrate 10M --fps 30 --strict --workers 1
 ```
+
+`/workspace` 루트 자체는 composition project가 아니다. 실제 runner도 요청의 `project_id`에 해당하는
+`/workspace/<project_id>`만 검사하고 렌더링한다.
 
 FastAPI의 `POST /api/v1/reels/caption`에 스크립트와 공유 작업 디렉터리 내의
 결합 MP4 파일명을 전달하면, runner가 자막이 포함된 최종 MP4를 생성합니다.
@@ -105,7 +118,7 @@ FastAPI의 `POST /api/v1/reels/caption`에 스크립트와 공유 작업 디렉�
 필요한 환경변수:
 
 ```bash
-OPENROUTER_API_KEY=공용_키
+OPENROUTER_API_KEY=
 OPENROUTER_SCRIPT_MODEL=openai/gpt-5.4-mini
 OPENROUTER_TTS_MODEL=google/gemini-3.1-flash-tts-preview
 OPENROUTER_TTS_VOICE=Aoede
@@ -189,7 +202,7 @@ Content-Type: application/json
     "scenes": [
       {
         "scene_name": "Hook",
-        "time_range_sec": {"start": 0, "end": 3},
+        "time_range_sec": {"start": 0, "end": 4},
         "visual": "상품을 화면 중앙에 보여준다.",
         "auditory": {
           "subtitle": "상품 소개",
@@ -218,16 +231,39 @@ Content-Type: application/json
 스크립트는 API 호출 전에 차단하며, 긴 영상은 장면 분할·결합 또는 해당 길이를
 지원하는 다른 모델이 필요합니다.
 
+이 direct `/video` 경로는 DB 설정이 없으면 검증 실패 시 2회 자동 재시도하므로 최초 요청을 포함해
+최대 3개의 유료 provider 생성이 발생할 수 있습니다. Studio의 `/generate` 경로는 후보별 자동
+유료 재시도를 0으로 고정하고 명시적인 retry 요청만 허용합니다.
+
 ## Production 후보 생성 API
 
-`POST /api/v1/reels/generate`는 `candidate_count` 1~4(기본 3)를 받아 narration을
+`POST /api/v1/reels/generate`는 `candidate_count` 1~4(생략 시 기본 1)를 받아 narration을
 한 번 만든 뒤 후보를 각각 생성합니다. 자동 유료 재시도는 하지 않으며 실패한
 후보는 명시적인 retry API로만 다시 생성합니다.
 
 ```json
 {
   "product": {"name": "상품", "image_url": "https://cdn.example.com/product.jpg"},
-  "script": {"meta": {}, "summary": {}, "scenes": []},
+  "script": {
+    "meta": {"output_format_version": "1.0", "framework": "Hook-CTA", "language": "ko"},
+    "summary": {
+      "main_target": "육아에 관심 있는 보호자",
+      "pain_point": "상품 선택이 어렵다",
+      "product_usp": "간편하게 사용할 수 있다",
+      "key_message": "상품의 핵심 장점",
+      "tone_and_manner": "생활형 광고"
+    },
+    "scenes": [
+      {
+        "scene_name": "Hook + CTA",
+        "time_range_sec": {"start": 0, "end": 4},
+        "visual": "상품을 화면 중앙에 보여준다.",
+        "auditory": {"subtitle": "지금 확인하세요", "voiceover": "필요했던 상품, 지금 확인해 보세요."},
+        "notes": "상품 형태와 라벨을 유지한다."
+      }
+    ],
+    "compliance_notes": {"avoid": [], "focus": []}
+  },
   "candidate_count": 3,
   "influencer_image_urls": ["https://cdn.example.com/person-portrait.jpg"]
 }
