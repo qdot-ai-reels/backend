@@ -121,6 +121,32 @@ class GenerationQuoteRow(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class GenerationRequestRow(Base):
+    """Durable, non-payload reservation for one client generation submission."""
+
+    __tablename__ = "generation_requests"
+
+    client_request_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_hash: Mapped[str] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(32), default="IN_PROGRESS", index=True)
+    owner_token: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    job_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+    rejection_http_status: Mapped[int | None] = mapped_column(Integer)
+    rejection_code: Mapped[str | None] = mapped_column(String(64))
+    rejection_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 def get_engine():
     from app.core.config import settings
 

@@ -399,6 +399,7 @@ class DatabaseLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 "ix_generation_jobs_status_created_at_job_id",
             }.issubset(generation_indexes)
         )
+        self.assertIn("generation_requests", inspect(engine).get_table_names())
         with engine.connect() as connection:
             row = connection.execute(
                 text(

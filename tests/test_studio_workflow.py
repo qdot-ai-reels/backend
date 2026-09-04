@@ -12,6 +12,12 @@ from app.generation_quotes import (
     GenerationQuoteExpiredError,
     GenerationQuoteMismatchError,
 )
+from app.generation_jobs import (
+    GENERATION_REQUEST_ACCEPTED,
+    GENERATION_REQUEST_CONFLICT,
+    GENERATION_REQUEST_IN_PROGRESS,
+    GenerationRequestReservation,
+)
 from app.generation_templates import get_generation_template
 from app.script_generator import ScriptGenerationRequest, build_script_prompt
 from app.settings_service import ProviderCatalogError, VideoModelCapabilities
@@ -59,6 +65,26 @@ def template_script(template_id="ugc_full_15"):
 
 
 class StudioWorkflowApiTests(unittest.TestCase):
+    def setUp(self):
+        self.reserve_request_patcher = patch(
+            "app.api.v1.final_generation.reserve_generation_request",
+            side_effect=lambda client_request_id, request_hash: GenerationRequestReservation(
+                client_request_id=client_request_id,
+                request_hash=request_hash,
+                state=GENERATION_REQUEST_IN_PROGRESS,
+                is_owner=True,
+                owner_token="test-owner-token",
+            ),
+        )
+        self.reject_request_patcher = patch(
+            "app.api.v1.final_generation.reject_generation_request",
+            return_value=True,
+        )
+        self.reserve_request = self.reserve_request_patcher.start()
+        self.reject_request = self.reject_request_patcher.start()
+        self.addCleanup(self.reject_request_patcher.stop)
+        self.addCleanup(self.reserve_request_patcher.stop)
+
     def app(self):
         app = FastAPI()
         app.include_router(router)
@@ -171,7 +197,7 @@ class StudioWorkflowApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 422)
-        self.assertIn("time_range_sec", response.json()["detail"])
+        self.assertIn("time_range_sec", response.json()["detail"]["message"])
         create_job.assert_not_called()
         run_job.assert_not_called()
 
@@ -233,10 +259,8 @@ class StudioWorkflowApiTests(unittest.TestCase):
     @patch("app.api.v1.final_generation.create_job")
     @patch("app.api.v1.final_generation.validate_normalized_influencer_references")
     @patch("app.api.v1.final_generation.validate_product_image_inputs")
-    @patch("app.api.v1.final_generation.get_job_idempotency", return_value=None)
     def test_same_client_request_replays_same_job_and_changed_body_conflicts(
         self,
-        get_identity,
         _validate_product,
         _validate_influencer,
         create_job,
@@ -251,6 +275,32 @@ class StudioWorkflowApiTests(unittest.TestCase):
             "candidate_count": 1,
             "client_request_id": "browser-request-1",
         }
+        reservation_state = {}
+
+        def reserve(client_request_id, request_hash):
+            if "request_hash" not in reservation_state:
+                reservation_state["request_hash"] = request_hash
+                return GenerationRequestReservation(
+                    client_request_id=client_request_id,
+                    request_hash=request_hash,
+                    state=GENERATION_REQUEST_IN_PROGRESS,
+                    is_owner=True,
+                    owner_token="first-owner",
+                )
+            if request_hash == reservation_state["request_hash"]:
+                return GenerationRequestReservation(
+                    client_request_id=client_request_id,
+                    request_hash=request_hash,
+                    state=GENERATION_REQUEST_ACCEPTED,
+                    job_id=reservation_state["job_id"],
+                )
+            return GenerationRequestReservation(
+                client_request_id=client_request_id,
+                request_hash=request_hash,
+                state=GENERATION_REQUEST_CONFLICT,
+            )
+
+        self.reserve_request.side_effect = reserve
         with (
             patch("app.api.v1.final_generation.get_job", return_value=None),
             patch(
@@ -269,9 +319,8 @@ class StudioWorkflowApiTests(unittest.TestCase):
             TestClient(self.app()) as client,
         ):
             first = client.post("/generate", json=request)
-            request_hash = create_job.call_args.kwargs["request_hash"]
             existing_job_id = first.json()["job_id"]
-            get_identity.return_value = (existing_job_id, request_hash)
+            reservation_state["job_id"] = existing_job_id
             validate_quote.side_effect = GenerationQuoteExpiredError(
                 "비용 견적이 만료되었습니다."
             )
@@ -315,7 +364,7 @@ class StudioWorkflowApiTests(unittest.TestCase):
             ),
             patch(
                 "app.api.v1.final_generation.get_job_idempotency",
-                side_effect=[None, ("job-from-race", "same-request-hash")],
+                return_value=("job-from-race", "same-request-hash"),
             ),
             patch(
                 "app.api.v1.final_generation.get_job",
@@ -342,6 +391,10 @@ class StudioWorkflowApiTests(unittest.TestCase):
             patch(
                 "app.api.v1.final_generation.create_job",
                 side_effect=duplicate,
+            ),
+            patch(
+                "app.api.v1.final_generation.accept_generation_request_existing_job",
+                return_value=True,
             ),
             patch("app.api.v1.final_generation.run_generation_job") as run_job,
             TestClient(self.app()) as client,
@@ -370,7 +423,7 @@ class StudioWorkflowApiTests(unittest.TestCase):
             ),
             patch(
                 "app.api.v1.final_generation.get_job_idempotency",
-                side_effect=[None, ("existing-job", "other-request-hash")],
+                return_value=("existing-job", "other-request-hash"),
             ),
             patch(
                 "app.api.v1.final_generation.validate_product_image_inputs"

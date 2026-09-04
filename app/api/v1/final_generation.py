@@ -28,13 +28,21 @@ from app.api.v1.video import publish_validated_video, select_video_resolution
 from app.core.config import settings
 from app.db import SQLAlchemySettingsRepository, SessionLocal
 from app.generation_jobs import (
+    GENERATION_REQUEST_ACCEPTED,
+    GENERATION_REQUEST_CONFLICT,
+    GENERATION_REQUEST_IN_PROGRESS,
+    GENERATION_REQUEST_REJECTED,
+    GenerationRequestReservation,
     _error_metadata,
+    accept_generation_request_existing_job,
     create_job,
     get_generation_request,
     get_job,
     get_job_idempotency,
     get_job_payload,
     list_generation_jobs,
+    reject_generation_request,
+    reserve_generation_request,
     update_candidate,
     update_job,
 )
@@ -286,10 +294,7 @@ def get_generation_request_status(
             },
             headers={"Cache-Control": "no-store"},
         )
-    return {
-        **request,
-        "status_url": f"/api/v1/reels/generate/{request['job_id']}",
-    }
+    return request
 
 
 def _selected_video_model_id() -> str:
@@ -359,13 +364,143 @@ def resolve_influencer_image_urls(payload: dict[str, Any]) -> tuple[str, ...]:
         )
     return resolved
 
+
+def _request_in_progress_response(
+    client_request_id: str,
+    candidate_count: int,
+) -> dict[str, Any]:
+    request = get_generation_request(client_request_id) or {
+        "client_request_id": client_request_id,
+        "request_state": GENERATION_REQUEST_IN_PROGRESS,
+        "job_id": None,
+        "status": "PENDING",
+        "stage": "REQUEST_VALIDATION",
+        "status_url": None,
+        "error": None,
+        "recoverable": False,
+        "retry_after_seconds": None,
+    }
+    return {
+        **request,
+        "candidate_count": candidate_count,
+        "idempotent_replay": True,
+    }
+
+
+def _raise_stored_request_rejection(
+    reservation: GenerationRequestReservation,
+) -> None:
+    raise HTTPException(
+        status_code=reservation.rejection_http_status or 422,
+        detail={
+            "code": reservation.rejection_code or "REQUEST_REJECTED",
+            "message": (
+                reservation.rejection_message
+                or "생성 요청이 검증 단계에서 거절되었습니다."
+            ),
+        },
+    )
+
+
+def _persist_rejection_and_raise(
+    reservation: GenerationRequestReservation | None,
+    *,
+    status_code: int,
+    code: str,
+    message: str,
+) -> None:
+    if (
+        reservation is not None
+        and reservation.is_owner
+        and reservation.owner_token is not None
+    ):
+        persisted = reject_generation_request(
+            reservation.client_request_id,
+            reservation.request_hash,
+            reservation.owner_token,
+            http_status=status_code,
+            code=code,
+            message=message,
+        )
+        if not persisted:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "GENERATION_REQUEST_STATE_CHANGED",
+                    "message": (
+                        "생성 요청 처리 소유권이 변경되었습니다. 기존 요청 상태를 다시 확인해 주세요."
+                    ),
+                },
+            )
+        detail: str | dict[str, str] = {"code": code, "message": message}
+    else:
+        detail = message
+    raise HTTPException(status_code=status_code, detail=detail)
+
+
+def _existing_reservation_response(
+    reservation: GenerationRequestReservation,
+    body: FinalGenerationBody,
+) -> dict[str, Any] | None:
+    if reservation.state == GENERATION_REQUEST_CONFLICT:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "IDEMPOTENCY_CONFLICT",
+                "message": "client_request_id가 다른 생성 요청에 이미 사용되었습니다.",
+            },
+        )
+    if reservation.legacy_job:
+        return None
+    if reservation.state == GENERATION_REQUEST_ACCEPTED and reservation.job_id:
+        return _generation_replay_response(
+            reservation.job_id,
+            body.candidate_count,
+            body.model_dump(),
+        )
+    if reservation.state == GENERATION_REQUEST_REJECTED:
+        _raise_stored_request_rejection(reservation)
+    if (
+        reservation.state == GENERATION_REQUEST_IN_PROGRESS
+        and not reservation.is_owner
+    ):
+        return _request_in_progress_response(
+            reservation.client_request_id,
+            body.candidate_count,
+        )
+    return None
+
+
 @router.post("/generate", status_code=status.HTTP_202_ACCEPTED, summary="상품 데이터와 스크립트로 전체 릴스 생성 작업 시작")
 def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    # This is the earliest point where FastAPI has produced a trustworthy,
+    # canonicalizable body. Schema-level 422 responses happen before this
+    # function, so clients must keep the same ID/body while their submit result
+    # is uncertain instead of interpreting an unreserved lookup as safe to fork.
+    reservation = None
+    reservation_hash = None
+    if body.client_request_id:
+        reservation_payload = body.model_dump(mode="json")
+        reservation_payload.pop("client_request_id", None)
+        reservation_hash = canonical_request_hash(reservation_payload)
+        reservation = reserve_generation_request(
+            body.client_request_id,
+            reservation_hash,
+        )
+        existing_response = _existing_reservation_response(reservation, body)
+        if existing_response is not None:
+            return existing_response
+
     job_id = uuid.uuid4().hex
     input_type = "product_template" if body.script is None else "product_and_script"
     image_url = body.image_url or _extract_image_url(body.product)
     if not image_url:
-        raise HTTPException(status_code=422, detail="상품 이미지 URL이 필요합니다.")
+        _persist_rejection_and_raise(
+            reservation,
+            status_code=422,
+            code="REQUEST_VALIDATION_FAILED",
+            message="상품 이미지 URL이 필요합니다.",
+        )
     payload = body.model_dump()
     try:
         template = (
@@ -413,7 +548,12 @@ def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTask
         )
         validate_normalized_influencer_references(influencer_image_urls)
     except (GenerationTemplateError, ScriptValidationError, ValueError) as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
+        _persist_rejection_and_raise(
+            reservation,
+            status_code=422,
+            code="REQUEST_VALIDATION_FAILED",
+            message=str(error),
+        )
     payload["image_url"] = image_url
     payload["influencer_image_urls"] = list(influencer_image_urls)
     payload["influencer_image_url"] = None
@@ -421,25 +561,22 @@ def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTask
     request_payload.pop("client_request_id", None)
     request_hash = canonical_request_hash(request_payload)
 
-    if body.client_request_id:
-        existing = get_job_idempotency(body.client_request_id)
-        if existing is not None:
-            existing_job_id, existing_hash = existing
-            if existing_hash != request_hash:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "code": "IDEMPOTENCY_CONFLICT",
-                        "message": (
-                            "client_request_id가 다른 생성 요청에 이미 사용되었습니다."
-                        ),
-                    },
-                )
-            return _generation_replay_response(
-                existing_job_id,
-                body.candidate_count,
-                payload,
+    if reservation is not None and reservation.legacy_job:
+        if reservation.existing_request_hash != request_hash:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "IDEMPOTENCY_CONFLICT",
+                    "message": (
+                        "client_request_id가 다른 생성 요청에 이미 사용되었습니다."
+                    ),
+                },
             )
+        return _generation_replay_response(
+            str(reservation.job_id),
+            body.candidate_count,
+            payload,
+        )
 
     if template is not None and body.quote_id:
         spec = QuoteSpec(
@@ -457,23 +594,29 @@ def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTask
                 model_id=_selected_video_model_id(),
             )
         except GenerationQuoteExpiredError as error:
-            raise HTTPException(
+            _persist_rejection_and_raise(
+                reservation,
                 status_code=409,
-                detail={"code": "REQUOTE_REQUIRED", "message": str(error)},
-            ) from error
+                code="REQUOTE_REQUIRED",
+                message=str(error),
+            )
         except GenerationQuoteMismatchError as error:
-            raise HTTPException(
+            _persist_rejection_and_raise(
+                reservation,
                 status_code=409,
-                detail={"code": "REQUOTE_REQUIRED", "message": str(error)},
-            ) from error
+                code="REQUOTE_REQUIRED",
+                message=str(error),
+            )
         except GenerationQuoteError as error:
-            raise HTTPException(
+            _persist_rejection_and_raise(
+                reservation,
                 status_code=404,
-                detail={"code": "QUOTE_NOT_FOUND", "message": str(error)},
-            ) from error
+                code="QUOTE_NOT_FOUND",
+                message=str(error),
+            )
 
     try:
-        create_job(
+        created = create_job(
             job_id,
             input_type=input_type,
             product=body.product,
@@ -482,7 +625,12 @@ def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTask
             payload=payload,
             candidate_count=body.candidate_count,
             client_request_id=body.client_request_id,
-            request_hash=request_hash,
+            request_hash=reservation_hash or request_hash,
+            reservation_owner_token=(
+                reservation.owner_token
+                if reservation is not None and reservation.is_owner
+                else None
+            ),
         )
     except IntegrityError as error:
         existing = (
@@ -490,22 +638,67 @@ def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTask
             if body.client_request_id
             else None
         )
-        if existing is None or existing[1] != request_hash:
-            raise HTTPException(
+        matching_hashes = {request_hash}
+        if reservation_hash is not None:
+            matching_hashes.add(reservation_hash)
+        if existing is None or existing[1] not in matching_hashes:
+            _persist_rejection_and_raise(
+                reservation,
                 status_code=409,
-                detail={
-                    "code": "IDEMPOTENCY_CONFLICT",
-                    "message": "동일한 client_request_id의 생성 요청이 이미 존재합니다.",
-                },
-            ) from error
+                code="IDEMPOTENCY_CONFLICT",
+                message="동일한 client_request_id의 생성 요청이 이미 존재합니다.",
+            )
+        if (
+            reservation is not None
+            and reservation.is_owner
+            and reservation.owner_token is not None
+        ):
+            accept_generation_request_existing_job(
+                reservation.client_request_id,
+                reservation.request_hash,
+                reservation.owner_token,
+                existing[0],
+            )
         return _generation_replay_response(
             existing[0],
             body.candidate_count,
             payload,
         )
-    # This is intentionally isolated behind FastAPI's dispatcher boundary. The
-    # persisted payload/candidate states allow a production queue worker to call
-    # run_generation_job without changing the API contract.
+    if created is False and body.client_request_id:
+        current_request = get_generation_request(body.client_request_id)
+        if (
+            current_request is not None
+            and current_request.get("request_state") == GENERATION_REQUEST_ACCEPTED
+            and current_request.get("job_id")
+        ):
+            return _generation_replay_response(
+                str(current_request["job_id"]),
+                body.candidate_count,
+                payload,
+            )
+        if (
+            current_request is not None
+            and current_request.get("request_state") == GENERATION_REQUEST_REJECTED
+            and isinstance(current_request.get("error"), dict)
+        ):
+            public_error = current_request["error"]
+            raise HTTPException(
+                status_code=int(public_error.get("http_status") or 422),
+                detail={
+                    "code": public_error.get("code") or "REQUEST_REJECTED",
+                    "message": (
+                        public_error.get("message")
+                        or "생성 요청이 검증 단계에서 거절되었습니다."
+                    ),
+                },
+            )
+        return _request_in_progress_response(
+            body.client_request_id,
+            body.candidate_count,
+        )
+    # ACCEPTED and the job row are already committed atomically here. A crash
+    # before enqueue cannot double-charge, but can leave a PENDING job until the
+    # deferred durable worker/outbox boundary reconciles it.
     InProcessGenerationDispatcher(background_tasks).enqueue(
         run_generation_job, job_id, payload
     )

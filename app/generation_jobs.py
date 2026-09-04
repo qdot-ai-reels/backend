@@ -5,12 +5,16 @@ from __future__ import annotations
 import base64
 import binascii
 import json
-from datetime import datetime, timezone
+import math
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
+from sqlalchemy.exc import IntegrityError
 
-from app.db import GenerationJobRow, SessionLocal
+from app.db import GenerationJobRow, GenerationRequestRow, SessionLocal
 
 
 PUBLIC_ERROR_MESSAGES = {
@@ -46,21 +50,32 @@ PUBLIC_CANDIDATE_FIELDS = frozenset(
         "legacy_artifact",
     }
 )
+GENERATION_REQUEST_LEASE_SECONDS = 5 * 60
+GENERATION_REQUEST_IN_PROGRESS = "IN_PROGRESS"
+GENERATION_REQUEST_ACCEPTED = "ACCEPTED"
+GENERATION_REQUEST_REJECTED = "REJECTED"
+GENERATION_REQUEST_CONFLICT = "CONFLICT"
 
 
-def create_job(
-    job_id: str,
-    *,
-    input_type: str,
-    product: dict[str, Any] | None,
-    script: dict[str, Any] | None,
-    image_url: str | None,
-    payload: dict[str, Any] | None = None,
-    candidate_count: int = 0,
-    client_request_id: str | None = None,
-    request_hash: str | None = None,
-) -> None:
-    candidates = [
+@dataclass(frozen=True)
+class GenerationRequestReservation:
+    """Internal ownership result. Tokens and hashes must never enter API responses."""
+
+    client_request_id: str
+    request_hash: str
+    state: str
+    is_owner: bool = False
+    owner_token: str | None = None
+    job_id: str | None = None
+    rejection_http_status: int | None = None
+    rejection_code: str | None = None
+    rejection_message: str | None = None
+    legacy_job: bool = False
+    existing_request_hash: str | None = None
+
+
+def _new_candidates(candidate_count: int) -> list[dict[str, Any]]:
+    return [
         {
             "candidate_id": f"candidate-{index:02d}",
             "index": index,
@@ -78,7 +93,48 @@ def create_job(
         }
         for index in range(1, candidate_count + 1)
     ]
+
+
+def create_job(
+    job_id: str,
+    *,
+    input_type: str,
+    product: dict[str, Any] | None,
+    script: dict[str, Any] | None,
+    image_url: str | None,
+    payload: dict[str, Any] | None = None,
+    candidate_count: int = 0,
+    client_request_id: str | None = None,
+    request_hash: str | None = None,
+    reservation_owner_token: str | None = None,
+) -> bool:
+    candidates = _new_candidates(candidate_count)
     with SessionLocal() as session:
+        if reservation_owner_token is not None:
+            if client_request_id is None or request_hash is None:
+                raise ValueError("예약 작업 생성에는 request ID와 hash가 필요합니다.")
+            claimed = session.execute(
+                update(GenerationRequestRow)
+                .where(
+                    GenerationRequestRow.client_request_id == client_request_id,
+                    GenerationRequestRow.request_hash == request_hash,
+                    GenerationRequestRow.state == GENERATION_REQUEST_IN_PROGRESS,
+                    GenerationRequestRow.owner_token == reservation_owner_token,
+                )
+                .values(
+                    state=GENERATION_REQUEST_ACCEPTED,
+                    owner_token=None,
+                    lease_expires_at=None,
+                    job_id=job_id,
+                    rejection_http_status=None,
+                    rejection_code=None,
+                    rejection_message=None,
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            if claimed.rowcount != 1:
+                session.rollback()
+                return False
         session.add(
             GenerationJobRow(
                 job_id=job_id,
@@ -98,6 +154,7 @@ def create_job(
             )
         )
         session.commit()
+        return True
 
 
 def update_job(job_id: str, **values: Any) -> None:
@@ -178,6 +235,249 @@ def get_job(job_id: str) -> dict[str, Any] | None:
         return _job_response(row) if row is not None else None
 
 
+def _as_utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _reservation_result_from_row(
+    row: GenerationRequestRow,
+    *,
+    is_owner: bool = False,
+) -> GenerationRequestReservation:
+    return GenerationRequestReservation(
+        client_request_id=row.client_request_id,
+        request_hash=row.request_hash,
+        state=row.state,
+        is_owner=is_owner,
+        owner_token=row.owner_token if is_owner else None,
+        job_id=row.job_id,
+        rejection_http_status=row.rejection_http_status,
+        rejection_code=row.rejection_code,
+        rejection_message=row.rejection_message,
+        existing_request_hash=row.request_hash,
+    )
+
+
+def _resolve_existing_reservation(
+    session,
+    existing: GenerationRequestRow,
+    *,
+    request_hash: str,
+    current_time: datetime,
+    owner_token: str,
+    lease_expires_at: datetime,
+) -> GenerationRequestReservation:
+    if existing.request_hash != request_hash:
+        return GenerationRequestReservation(
+            client_request_id=existing.client_request_id,
+            request_hash=request_hash,
+            state=GENERATION_REQUEST_CONFLICT,
+            existing_request_hash=existing.request_hash,
+        )
+    if existing.state != GENERATION_REQUEST_IN_PROGRESS:
+        return _reservation_result_from_row(existing)
+
+    lease_expired = (
+        existing.lease_expires_at is None
+        or _as_utc_datetime(existing.lease_expires_at) <= current_time
+    )
+    if not lease_expired:
+        return _reservation_result_from_row(existing)
+
+    reclaimed = session.execute(
+        update(GenerationRequestRow)
+        .where(
+            GenerationRequestRow.client_request_id == existing.client_request_id,
+            GenerationRequestRow.request_hash == request_hash,
+            GenerationRequestRow.state == GENERATION_REQUEST_IN_PROGRESS,
+            GenerationRequestRow.owner_token == existing.owner_token,
+            or_(
+                GenerationRequestRow.lease_expires_at.is_(None),
+                GenerationRequestRow.lease_expires_at <= current_time,
+            ),
+        )
+        .values(
+            owner_token=owner_token,
+            lease_expires_at=lease_expires_at,
+            updated_at=current_time,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    session.commit()
+    if reclaimed.rowcount == 1:
+        return GenerationRequestReservation(
+            client_request_id=existing.client_request_id,
+            request_hash=request_hash,
+            state=GENERATION_REQUEST_IN_PROGRESS,
+            is_owner=True,
+            owner_token=owner_token,
+        )
+    session.expire_all()
+    current = session.get(GenerationRequestRow, existing.client_request_id)
+    if current is None:
+        raise RuntimeError("생성 요청 예약 결과를 확인하지 못했습니다.")
+    return _reservation_result_from_row(current)
+
+
+def _legacy_generation_request(
+    session,
+    client_request_id: str,
+    request_hash: str,
+) -> GenerationRequestReservation | None:
+    legacy = session.execute(
+        select(
+            GenerationJobRow.job_id,
+            GenerationJobRow.request_hash,
+        ).where(GenerationJobRow.client_request_id == client_request_id)
+    ).mappings().one_or_none()
+    if legacy is None:
+        return None
+    return GenerationRequestReservation(
+        client_request_id=client_request_id,
+        request_hash=request_hash,
+        state=GENERATION_REQUEST_ACCEPTED,
+        job_id=legacy["job_id"],
+        legacy_job=True,
+        existing_request_hash=legacy["request_hash"],
+    )
+
+
+def reserve_generation_request(
+    client_request_id: str,
+    request_hash: str,
+    *,
+    now: datetime | None = None,
+) -> GenerationRequestReservation:
+    """Atomically claim validation ownership before any remote input work.
+
+    An expired five-minute lease can be reclaimed by the same request body. Every
+    accepting/rejecting write is fenced by the current owner token, so a stale
+    process cannot create or reject a job after another process takes ownership.
+    """
+    current_time = _as_utc_datetime(now or datetime.now(timezone.utc))
+    owner_token = uuid.uuid4().hex
+    lease_expires_at = current_time + timedelta(
+        seconds=GENERATION_REQUEST_LEASE_SECONDS
+    )
+    with SessionLocal() as session:
+        existing = session.get(GenerationRequestRow, client_request_id)
+        if existing is not None:
+            return _resolve_existing_reservation(
+                session,
+                existing,
+                request_hash=request_hash,
+                current_time=current_time,
+                owner_token=owner_token,
+                lease_expires_at=lease_expires_at,
+            )
+
+        legacy = _legacy_generation_request(session, client_request_id, request_hash)
+        if legacy is not None:
+            return legacy
+
+        session.add(
+            GenerationRequestRow(
+                client_request_id=client_request_id,
+                request_hash=request_hash,
+                state=GENERATION_REQUEST_IN_PROGRESS,
+                owner_token=owner_token,
+                lease_expires_at=lease_expires_at,
+            )
+        )
+        try:
+            session.commit()
+            return GenerationRequestReservation(
+                client_request_id=client_request_id,
+                request_hash=request_hash,
+                state=GENERATION_REQUEST_IN_PROGRESS,
+                is_owner=True,
+                owner_token=owner_token,
+            )
+        except IntegrityError:
+            session.rollback()
+
+        existing = session.get(GenerationRequestRow, client_request_id)
+        if existing is not None:
+            return _resolve_existing_reservation(
+                session,
+                existing,
+                request_hash=request_hash,
+                current_time=current_time,
+                owner_token=owner_token,
+                lease_expires_at=lease_expires_at,
+            )
+        legacy = _legacy_generation_request(session, client_request_id, request_hash)
+        if legacy is not None:
+            return legacy
+        raise RuntimeError("생성 요청 예약 결과를 확인하지 못했습니다.")
+
+
+def reject_generation_request(
+    client_request_id: str,
+    request_hash: str,
+    owner_token: str,
+    *,
+    http_status: int,
+    code: str,
+    message: str,
+) -> bool:
+    """Persist one definitive rejection only while the caller owns the lease."""
+    with SessionLocal() as session:
+        rejected = session.execute(
+            update(GenerationRequestRow)
+            .where(
+                GenerationRequestRow.client_request_id == client_request_id,
+                GenerationRequestRow.request_hash == request_hash,
+                GenerationRequestRow.state == GENERATION_REQUEST_IN_PROGRESS,
+                GenerationRequestRow.owner_token == owner_token,
+            )
+            .values(
+                state=GENERATION_REQUEST_REJECTED,
+                owner_token=None,
+                lease_expires_at=None,
+                rejection_http_status=http_status,
+                rejection_code=code,
+                rejection_message=message,
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        session.commit()
+        return rejected.rowcount == 1
+
+
+def accept_generation_request_existing_job(
+    client_request_id: str,
+    request_hash: str,
+    owner_token: str,
+    job_id: str,
+) -> bool:
+    """Fence and link a reservation when a compatible legacy insert won a race."""
+    with SessionLocal() as session:
+        accepted = session.execute(
+            update(GenerationRequestRow)
+            .where(
+                GenerationRequestRow.client_request_id == client_request_id,
+                GenerationRequestRow.request_hash == request_hash,
+                GenerationRequestRow.state == GENERATION_REQUEST_IN_PROGRESS,
+                GenerationRequestRow.owner_token == owner_token,
+            )
+            .values(
+                state=GENERATION_REQUEST_ACCEPTED,
+                owner_token=None,
+                lease_expires_at=None,
+                job_id=job_id,
+                rejection_http_status=None,
+                rejection_code=None,
+                rejection_message=None,
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        session.commit()
+        return accepted.rowcount == 1
+
+
 def get_job_idempotency(client_request_id: str) -> tuple[str, str | None] | None:
     """Resolve one public idempotency key without exposing the persisted payload."""
     with SessionLocal() as session:
@@ -194,7 +494,79 @@ def get_job_idempotency(client_request_id: str) -> tuple[str, str | None] | None
 def get_generation_request(client_request_id: str) -> dict[str, Any] | None:
     """Return only the safe progress fields for one submitted client request."""
     with SessionLocal() as session:
-        row = session.execute(
+        reservation = session.execute(
+            select(
+                GenerationRequestRow.client_request_id,
+                GenerationRequestRow.job_id.label("request_job_id"),
+                GenerationJobRow.job_id,
+                GenerationJobRow.status,
+                GenerationJobRow.stage,
+                GenerationRequestRow.state.label("request_state"),
+                GenerationRequestRow.rejection_http_status,
+                GenerationRequestRow.rejection_code,
+                GenerationRequestRow.rejection_message,
+                GenerationRequestRow.lease_expires_at,
+            )
+            .select_from(GenerationRequestRow)
+            .outerjoin(
+                GenerationJobRow,
+                GenerationJobRow.job_id == GenerationRequestRow.job_id,
+            )
+            .where(GenerationRequestRow.client_request_id == client_request_id)
+        ).mappings().one_or_none()
+        if reservation is not None:
+            request_state = reservation["request_state"]
+            job_id = reservation["job_id"] or reservation["request_job_id"]
+            if request_state == GENERATION_REQUEST_ACCEPTED:
+                request_status = reservation["status"] or "PENDING"
+                request_stage = reservation["stage"] or "QUEUED"
+            elif request_state == GENERATION_REQUEST_REJECTED:
+                request_status = "REJECTED"
+                request_stage = "REQUEST_REJECTED"
+            else:
+                request_status = "PENDING"
+                request_stage = "REQUEST_VALIDATION"
+            recoverable = False
+            retry_after_seconds = None
+            if request_state == GENERATION_REQUEST_IN_PROGRESS:
+                lease_expires_at = reservation["lease_expires_at"]
+                if lease_expires_at is None:
+                    retry_after_seconds = 0
+                    recoverable = True
+                else:
+                    remaining = math.ceil(
+                        (
+                            _as_utc_datetime(lease_expires_at)
+                            - datetime.now(timezone.utc)
+                        ).total_seconds()
+                    )
+                    retry_after_seconds = max(0, remaining)
+                    recoverable = retry_after_seconds == 0
+            public_error = None
+            if request_state == GENERATION_REQUEST_REJECTED:
+                public_error = {
+                    "code": reservation["rejection_code"] or "REQUEST_REJECTED",
+                    "message": (
+                        reservation["rejection_message"]
+                        or "생성 요청이 검증 단계에서 거절되었습니다."
+                    ),
+                    "http_status": reservation["rejection_http_status"] or 422,
+                }
+            return {
+                "client_request_id": client_request_id,
+                "request_state": request_state,
+                "job_id": job_id,
+                "status": request_status,
+                "stage": request_stage,
+                "status_url": (
+                    f"/api/v1/reels/generate/{job_id}" if job_id else None
+                ),
+                "error": public_error,
+                "recoverable": recoverable,
+                "retry_after_seconds": retry_after_seconds,
+            }
+
+        legacy = session.execute(
             select(
                 GenerationJobRow.client_request_id,
                 GenerationJobRow.job_id,
@@ -202,13 +574,18 @@ def get_generation_request(client_request_id: str) -> dict[str, Any] | None:
                 GenerationJobRow.stage,
             ).where(GenerationJobRow.client_request_id == client_request_id)
         ).mappings().one_or_none()
-        if row is None:
+        if legacy is None:
             return None
         return {
-            "client_request_id": row["client_request_id"],
-            "job_id": row["job_id"],
-            "status": row["status"],
-            "stage": row["stage"],
+            "client_request_id": legacy["client_request_id"],
+            "request_state": GENERATION_REQUEST_ACCEPTED,
+            "job_id": legacy["job_id"],
+            "status": legacy["status"],
+            "stage": legacy["stage"],
+            "status_url": f"/api/v1/reels/generate/{legacy['job_id']}",
+            "error": None,
+            "recoverable": False,
+            "retry_after_seconds": None,
         }
 
 
