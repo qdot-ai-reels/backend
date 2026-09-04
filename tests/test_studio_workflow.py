@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 from app.api.v1.final_generation import router, run_generation_job
 from app.generation_templates import get_generation_template
 from app.script_generator import ScriptGenerationRequest, build_script_prompt
+from app.settings_service import ProviderCatalogError, VideoModelCapabilities
+from app.video_generator import OpenRouterVideoClient
 
 
 def template_script(template_id="ugc_full_15"):
@@ -56,6 +58,21 @@ class StudioWorkflowApiTests(unittest.TestCase):
         app.include_router(router)
         return app
 
+    def test_all_studio_template_durations_reach_the_video_provider_boundary(self):
+        for template_id, expected_duration in (
+            ("ugc_quick_4", 4),
+            ("ugc_quick_6", 6),
+            ("ugc_balanced_8", 8),
+            ("ugc_full_15", 15),
+        ):
+            with self.subTest(template_id=template_id):
+                self.assertEqual(
+                    OpenRouterVideoClient._validate_and_get_duration(
+                        template_script(template_id)
+                    ),
+                    expected_duration,
+                )
+
     @patch("app.api.v1.final_generation.run_generation_job")
     @patch("app.api.v1.final_generation.create_job")
     @patch("app.api.v1.final_generation.validate_normalized_influencer_references")
@@ -67,7 +84,27 @@ class StudioWorkflowApiTests(unittest.TestCase):
         create_job,
         run_job,
     ):
-        with TestClient(self.app()) as client:
+        quote = {
+            "quote_id": "quote-1",
+            "currency": "USD",
+            "total": {"min": 5.4, "expected": 5.7, "max": 6.27},
+            "coverage": "video_only",
+        }
+        with (
+            patch(
+                "app.api.v1.final_generation.get_job_idempotency",
+                return_value=None,
+            ),
+            patch(
+                "app.api.v1.final_generation.validate_generation_quote",
+                return_value=quote,
+            ),
+            patch(
+                "app.api.v1.final_generation._selected_video_model_id",
+                return_value="video/model",
+            ),
+            TestClient(self.app()) as client,
+        ):
             response = client.post(
                 "/generate",
                 json={
@@ -75,8 +112,15 @@ class StudioWorkflowApiTests(unittest.TestCase):
                     "image_url": "https://example.com/product.jpg",
                     "template_id": "ugc_full_15",
                     "template_version": 1,
+                    "quote_id": "quote-1",
+                    "client_request_id": "one-click-1",
                     "visual_mode": "generated_model",
                     "candidate_count": 1,
+                    "cta": "지금 링크에서 확인하세요",
+                    "advertising_purpose": "상품 인지도 확보",
+                    "must_include": "상품 사용 장면",
+                    "must_exclude": "검증되지 않은 수량",
+                    "extra_details": "차분한 주방 분위기",
                 },
             )
 
@@ -88,6 +132,9 @@ class StudioWorkflowApiTests(unittest.TestCase):
         queued_payload = create_job.call_args.kwargs["payload"]
         self.assertEqual(queued_payload["max_duration_seconds"], 15)
         self.assertEqual(queued_payload["template"]["id"], "ugc_full_15")
+        self.assertEqual(queued_payload["quote"]["total"]["max"], 6.27)
+        self.assertEqual(queued_payload["cta"], "지금 링크에서 확인하세요")
+        self.assertEqual(queued_payload["advertising_purpose"], "상품 인지도 확보")
         run_job.assert_called_once()
 
     @patch("app.api.v1.final_generation.run_generation_job")
@@ -110,6 +157,8 @@ class StudioWorkflowApiTests(unittest.TestCase):
                     "product": {"name": "상품"},
                     "image_url": "https://example.com/product.jpg",
                     "template_id": "ugc_full_15",
+                    "quote_id": "quote-1",
+                    "client_request_id": "mismatch-1",
                     "script": script,
                     "visual_mode": "generated_model",
                 },
@@ -133,13 +182,34 @@ class StudioWorkflowApiTests(unittest.TestCase):
     ):
         script = template_script("ugc_quick_6")
         script["scenes"][0]["section"] = "hook"
-        with TestClient(self.app()) as client:
+        with (
+            patch(
+                "app.api.v1.final_generation.get_job_idempotency",
+                return_value=None,
+            ),
+            patch(
+                "app.api.v1.final_generation.validate_generation_quote",
+                return_value={
+                    "quote_id": "quote-1",
+                    "currency": "USD",
+                    "total": {"min": 1, "expected": 2, "max": 3},
+                    "coverage": "video_only",
+                },
+            ),
+            patch(
+                "app.api.v1.final_generation._selected_video_model_id",
+                return_value="video/model",
+            ),
+            TestClient(self.app()) as client,
+        ):
             response = client.post(
                 "/generate",
                 json={
                     "product": {"name": "상품"},
                     "image_url": "https://example.com/product.jpg",
                     "template_id": "ugc_quick_6",
+                    "quote_id": "quote-1",
+                    "client_request_id": "matching-1",
                     "script": script,
                     "visual_mode": "generated_model",
                 },
@@ -170,13 +240,28 @@ class StudioWorkflowApiTests(unittest.TestCase):
             "product": {"name": "상품"},
             "image_url": "https://example.com/product.jpg",
             "template_id": "ugc_quick_4",
+            "quote_id": "quote-1",
             "visual_mode": "generated_model",
             "candidate_count": 1,
             "client_request_id": "browser-request-1",
         }
-        with patch("app.api.v1.final_generation.get_job", return_value=None), TestClient(
-            self.app()
-        ) as client:
+        with (
+            patch("app.api.v1.final_generation.get_job", return_value=None),
+            patch(
+                "app.api.v1.final_generation.validate_generation_quote",
+                return_value={
+                    "quote_id": "quote-1",
+                    "currency": "USD",
+                    "total": {"min": 1, "expected": 2, "max": 3},
+                    "coverage": "video_only",
+                },
+            ),
+            patch(
+                "app.api.v1.final_generation._selected_video_model_id",
+                return_value="video/model",
+            ),
+            TestClient(self.app()) as client,
+        ):
             first = client.post("/generate", json=request)
             request_hash = create_job.call_args.kwargs["request_hash"]
             existing_job_id = first.json()["job_id"]
@@ -205,13 +290,38 @@ class StudioWorkflowApiTests(unittest.TestCase):
             ["ugc_quick_4", "ugc_quick_6", "ugc_balanced_8", "ugc_full_15"],
         )
 
-    @patch("app.api.v1.final_generation._selected_video_model_id", return_value="video/model")
+    def test_template_generation_requires_quote_and_client_request_ids(self):
+        with TestClient(self.app()) as client:
+            missing_both = client.post(
+                "/generate",
+                json={
+                    "product": {"name": "상품"},
+                    "image_url": "https://example.com/product.jpg",
+                    "template_id": "ugc_quick_4",
+                },
+            )
+            missing_client_id = client.post(
+                "/generate",
+                json={
+                    "product": {"name": "상품"},
+                    "image_url": "https://example.com/product.jpg",
+                    "template_id": "ugc_quick_4",
+                    "quote_id": "quote-1",
+                },
+            )
+
+        self.assertEqual(missing_both.status_code, 422)
+        self.assertIn("quote_id", missing_both.text)
+        self.assertEqual(missing_client_id.status_code, 422)
+        self.assertIn("client_request_id", missing_client_id.text)
+
+    @patch("app.api.v1.final_generation._preflight_quote_model", return_value="video/model")
     @patch(
         "app.api.v1.final_generation.create_generation_quote",
         return_value={"quote_id": "quote-1", "total": {"expected": 5.7}},
     )
     def test_quote_endpoint_validates_and_passes_the_template_snapshot(
-        self, create_quote, _model
+        self, create_quote, _preflight
     ):
         with TestClient(self.app()) as client:
             response = client.post(
@@ -239,7 +349,62 @@ class StudioWorkflowApiTests(unittest.TestCase):
         self.assertEqual(spec.duration_seconds, 15)
         self.assertEqual(spec.candidate_count, 2)
         self.assertEqual(spec.resolution, "1080p")
+        _preflight.assert_called_once_with(duration_seconds=15, resolution="1080p")
         self.assertEqual(invalid.status_code, 422)
+
+    @patch("app.api.v1.final_generation.create_generation_quote")
+    @patch(
+        "app.api.v1.final_generation.get_video_model_capabilities",
+        side_effect=ProviderCatalogError("private provider detail"),
+    )
+    @patch("app.api.v1.final_generation._build_settings_service", return_value=(None, None))
+    def test_quote_catalog_failure_is_stable_502_without_persisting(
+        self,
+        _build_service,
+        _get_capabilities,
+        create_quote,
+    ):
+        with TestClient(self.app()) as client:
+            response = client.post(
+                "/generation-quotes",
+                json={"template_id": "ugc_full_15", "resolution": "1080p"},
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["detail"]["code"], "VIDEO_CATALOG_UNAVAILABLE")
+        self.assertNotIn("private provider detail", response.text)
+        create_quote.assert_not_called()
+
+    @patch("app.api.v1.final_generation.create_generation_quote")
+    @patch(
+        "app.api.v1.final_generation.get_video_model_capabilities",
+        return_value=VideoModelCapabilities(
+            model_id="video/model",
+            name="Video",
+            supported_durations=(4, 6, 8),
+            supported_aspect_ratios=("9:16",),
+            supported_resolutions=("720p",),
+            generate_audio=False,
+        ),
+    )
+    @patch("app.api.v1.final_generation._build_settings_service", return_value=(None, None))
+    def test_quote_rejects_model_without_exact_duration_or_1080p(
+        self,
+        _build_service,
+        _get_capabilities,
+        create_quote,
+    ):
+        with TestClient(self.app()) as client:
+            response = client.post(
+                "/generation-quotes",
+                json={"template_id": "ugc_full_15", "resolution": "1080p"},
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["detail"]["code"], "VIDEO_MODEL_UNSUPPORTED")
+        self.assertIn("15초", response.json()["detail"]["message"])
+        self.assertIn("1080p", response.json()["detail"]["message"])
+        create_quote.assert_not_called()
 
 
 class OneClickWorkerTests(unittest.TestCase):

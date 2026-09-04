@@ -436,9 +436,14 @@ class OpenRouterVideoClient:
             raise VideoGenerationError(f"영상 생성용 스크립트가 올바르지 않습니다: {error}") from error
 
         last_scene_end = validated_script["scenes"][-1]["time_range_sec"]["end"]
-        if not isinstance(last_scene_end, int) or last_scene_end < 1:
+        if (
+            isinstance(last_scene_end, bool)
+            or not isinstance(last_scene_end, (int, float))
+            or not float(last_scene_end).is_integer()
+            or last_scene_end < 1
+        ):
             raise VideoGenerationError("스크립트의 마지막 장면 종료 시간은 양의 정수여야 합니다.")
-        return last_scene_end
+        return int(last_scene_end)
 
     def _request_json(
         self,

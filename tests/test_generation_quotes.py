@@ -72,6 +72,10 @@ class GenerationQuoteTests(unittest.TestCase):
             result["total"],
             {"min": 2.888, "expected": 3.04, "max": 3.344},
         )
+        self.assertEqual(
+            result["total"]["max"],
+            result["line_items"][0]["subtotal_max"],
+        )
         self.assertEqual(result["coverage"], "video_only")
         self.assertEqual(result["automatic_paid_retries"], 0)
         self.assertEqual(

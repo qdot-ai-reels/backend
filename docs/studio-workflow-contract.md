@@ -55,6 +55,12 @@ downgrades a 15-second selection to a shorter provider duration.
 Persists an immutable quote for 15 minutes. The production output resolution is
 currently restricted to `1080p`.
 
+Before persistence, the endpoint reads the selected provider model catalog and
+requires exact support for the template duration, `1080p`, and `9:16`. It does
+not submit a video generation request. Catalog lookup failure returns the stable
+`VIDEO_CATALOG_UNAVAILABLE` error with HTTP 502; an unsupported combination
+returns `VIDEO_MODEL_UNSUPPORTED` with HTTP 422 and no quote is created.
+
 ```json
 {
   "template_id": "ugc_full_15",
@@ -75,7 +81,8 @@ The response contains `line_items`, `total.min`, `total.expected`, `total.max`,
 `created_at`, `expires_at`, and the selected model snapshot. `coverage` is
 explicitly `video_only`: script generation, TTS, rendering, and a user-triggered
 paid retry are not represented as if they were free or known. Automatic paid
-video retry remains zero.
+video retry remains zero. `total.max` is the user's approval ceiling for that
+generation click; changing any quoted input requires a new quote.
 
 ### `POST /generate`
 
@@ -87,13 +94,18 @@ send a template without a script:
   "product": {"name": "상품", "image_url": "https://cdn.example/product.jpg"},
   "template_id": "ugc_full_15",
   "template_version": 1,
-  "quote_id": "optional-persisted-quote-id",
+  "quote_id": "persisted-quote-id",
   "client_request_id": "one-browser-submit-id",
   "candidate_count": 1,
   "visual_mode": "generated_model",
   "resolution": "1080p"
 }
 ```
+
+Every request containing `template_id` must include both `quote_id` and
+`client_request_id`. This makes the non-legacy Studio path explicitly budgeted
+and idempotent. The legacy product-and-script request without `template_id`
+remains valid and defaults to one candidate.
 
 The accepted combinations are:
 
@@ -109,11 +121,11 @@ The prompt also prohibits inventing package quantity, count, fine print, or
 label numbers unless the product payload explicitly marks those claims as
 verified.
 
-`quote_id`, when supplied, must be unexpired and match template version,
+`quote_id` must be unexpired and match template version,
 duration, candidate count, visual mode, resolution, and the selected video model.
-A stale or changed quote
-returns 409. A missing quote returns 404. Quotes remain optional for legacy API
-compatibility.
+A stale or changed quote returns 409. A missing quote returns 404. The quoted
+resolution snapshot is passed to the provider request instead of being replaced
+by later runtime settings.
 
 `client_request_id` provides body idempotency. Repeating the same canonical
 request returns the first job with `idempotent_replay: true` and does not enqueue
@@ -134,8 +146,18 @@ listable with nullable fields.
 
 The existing `GET /generate/{job_id}` detail route retains its original fields
 and adds safe `product`, `duration_seconds`, `template`, compact `quote`,
-`cost_summary`, and `asset_fidelity` values. Existing file and candidate-retry
-routes are unchanged.
+`cost_summary`, `asset_fidelity`, and allowlisted `options` values. Raw job and
+candidate error evidence remains in the database, while list/detail responses
+return stable public error codes and messages without provider detail or local
+paths. A completed legacy row that only has the top-level output path is exposed
+as one `legacy-primary` playable artifact.
+
+Candidate retry is accepted only when the parent job is terminal, the candidate
+is failed, and its public `retryable` value is exactly true. Provider timeout,
+provider unavailability, shared script/TTS failures, and paid generation
+failures are deliberately non-retryable: they require provider reconciliation,
+whole-job recovery, or a new quote. A worker cannot race a retry while the
+parent remains active.
 
 ## Current asynchronous boundary
 
@@ -151,11 +173,11 @@ and TTS/final artifacts are local files. Candidate records still live in one
 JSON column, so PostgreSQL row locking serializes updates but does not provide a
 normalized candidate audit trail.
 
-The existing candidate retry route can resume only after shared narration has
+The candidate retry implementation can resume only after shared narration has
 been written locally. If script or TTS generation fails before
-`runtime/tts/{job_id}/narration.mp3` exists, a candidate can be marked
-retryable by its error category but candidate-only retry still returns 409. The
-whole-job checkpoint recovery described below is required for that case.
+`runtime/tts/{job_id}/narration.mp3` exists, its public error is non-retryable
+and candidate-only retry returns 409. The whole-job checkpoint recovery
+described below is required for that case.
 
 ## Deferred production durability slice
 

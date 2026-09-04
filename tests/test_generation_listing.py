@@ -142,7 +142,10 @@ class GenerationListingTests(unittest.TestCase):
                     image_url=None,
                     candidate_count=0,
                     candidates_json="[]",
-                    error_message="기존 오류",
+                    error_message=(
+                        "provider failed polling_url=https://provider.example/private "
+                        "path=/Users/person/runtime/source.mp4"
+                    ),
                     created_at=now,
                     updated_at=now,
                 )
@@ -153,7 +156,13 @@ class GenerationListingTests(unittest.TestCase):
 
         self.assertEqual(item["job_id"], "legacy")
         self.assertIsNone(item["template"])
-        self.assertEqual(item["error"]["message"], "기존 오류")
+        self.assertEqual(item["error"]["code"], "VIDEO_GENERATION_FAILED")
+        self.assertEqual(
+            item["error"]["message"],
+            "영상 후보를 생성하지 못했습니다. 새 견적이 필요합니다.",
+        )
+        self.assertNotIn("provider.example", json.dumps(item, ensure_ascii=False))
+        self.assertNotIn("/Users/person", json.dumps(item, ensure_ascii=False))
 
     def test_rejects_invalid_cursor(self):
         with self.assertRaisesRegex(ValueError, "cursor"):

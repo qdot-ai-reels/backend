@@ -569,6 +569,12 @@ class VideoGeneratorTests(unittest.TestCase):
         request_body = json.loads(opener.requests[0].data)
         self.assertEqual(request_body["duration"], 8)
 
+    def test_accepts_integral_float_duration_at_video_provider_boundary(self):
+        script = json.loads(json.dumps(SCRIPT))
+        script["scenes"][-1]["time_range_sec"]["end"] = 8.0
+
+        self.assertEqual(OpenRouterVideoClient._validate_and_get_duration(script), 8)
+
     def test_rejects_duration_not_supported_by_selected_model_before_api_call(self):
         script = json.loads(json.dumps(SCRIPT))
         script["scenes"][0]["time_range_sec"] = {"start": 0, "end": 22}

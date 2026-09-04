@@ -132,8 +132,10 @@ class SettingsServiceTests(unittest.TestCase):
 
     def test_sqlalchemy_repository_persists_one_global_record(self):
         engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(engine.dispose)
         Base.metadata.create_all(engine)
         session = sessionmaker(bind=engine)()
+        self.addCleanup(session.close)
         repository = SQLAlchemySettingsRepository(session)
 
         settings = repository.get()
@@ -345,6 +347,7 @@ class DatabaseLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     def test_migrates_legacy_settings_columns(self):
         engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(engine.dispose)
         with engine.begin() as connection:
             connection.execute(
                 text(
@@ -386,6 +389,15 @@ class DatabaseLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 "video_generation_retries",
                 "media_combine_retries",
             }.issubset(columns)
+        )
+        generation_indexes = {
+            item["name"] for item in inspect(engine).get_indexes("generation_jobs")
+        }
+        self.assertTrue(
+            {
+                "ix_generation_jobs_created_at_job_id",
+                "ix_generation_jobs_status_created_at_job_id",
+            }.issubset(generation_indexes)
         )
         with engine.connect() as connection:
             row = connection.execute(

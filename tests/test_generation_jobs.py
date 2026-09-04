@@ -113,6 +113,102 @@ class GenerationJobProvenanceTests(unittest.TestCase):
         self.assertNotIn("visual_mode", result)
         self.assertNotIn("influencer_reference_count", result)
 
+    def test_detail_exposes_only_allowlisted_studio_options(self):
+        result = self.get_job_for_payload(
+            {
+                "visual_mode": "generated_model",
+                "channel": "Instagram Reels",
+                "cta": "지금 확인",
+                "advertising_purpose": "인지도 확보",
+                "must_include": "제품 사용 장면",
+                "must_exclude": "가격 과장",
+                "extra_details": "밝은 주방",
+                "prompt": "private prompt",
+                "secret": "must-not-leak",
+                "influencer_image_urls": ["https://private.example/person.jpg"],
+            }
+        )
+
+        self.assertEqual(
+            result["options"],
+            {
+                "visual_mode": "generated_model",
+                "channel": "Instagram Reels",
+                "cta": "지금 확인",
+                "advertising_purpose": "인지도 확보",
+                "must_include": "제품 사용 장면",
+                "must_exclude": "가격 과장",
+                "extra_details": "밝은 주방",
+            },
+        )
+        encoded = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn("private prompt", encoded)
+        self.assertNotIn("must-not-leak", encoded)
+        self.assertNotIn("private.example", encoded)
+
+    def test_detail_sanitizes_raw_job_and_candidate_failure_evidence(self):
+        row = job_row(None)
+        row.status = "FAILED"
+        row.stage = "FAILED"
+        row.error_message = (
+            "provider timeout polling_url=https://provider.example/private "
+            "path=/Users/person/runtime/source.mp4"
+        )
+        row.candidate_count = 1
+        row.candidates_json = json.dumps(
+            [
+                {
+                    "candidate_id": "candidate-01",
+                    "status": "FAILED",
+                    "stage": "VIDEO_GENERATION",
+                    "error": row.error_message,
+                    "provider_polling_url": "https://provider.example/private-poll",
+                    "error_code": "VIDEO_PROVIDER_TIMEOUT",
+                    "retryable": True,
+                }
+            ]
+        )
+
+        with patch("app.generation_jobs.SessionLocal", return_value=FakeSession(row)):
+            result = get_job("job-1")
+
+        encoded = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn("provider.example", encoded)
+        self.assertNotIn("/Users/person", encoded)
+        self.assertNotIn("provider_polling_url", encoded)
+        self.assertEqual(result["error_code"], "VIDEO_PROVIDER_TIMEOUT")
+        self.assertFalse(result["retryable"])
+        self.assertEqual(
+            result["candidates"][0]["error"],
+            "영상 생성 상태 확인이 지연되고 있습니다. 운영자 확인이 필요합니다.",
+        )
+        self.assertFalse(result["candidates"][0]["retryable"])
+        self.assertIn("provider.example", row.error_message)
+        self.assertIn(
+            "/Users/person",
+            json.loads(row.candidates_json)[0]["error"],
+        )
+
+    def test_completed_legacy_output_becomes_one_playable_candidate(self):
+        row = job_row(None)
+        row.status = "COMPLETED"
+        row.stage = "COMPLETED"
+        row.output_path = "runtime/final/legacy.mp4"
+        row.video_job_id = "provider-legacy"
+        row.caption_job_id = "caption-legacy"
+        row.cost = 1.5
+
+        with patch("app.generation_jobs.SessionLocal", return_value=FakeSession(row)):
+            stored = get_job("job-1")
+
+        self.assertEqual(stored["candidate_count"], 1)
+        self.assertEqual(stored["completed_candidates"], 1)
+        self.assertEqual(stored["candidates"][0]["candidate_id"], "legacy-primary")
+        with patch("app.api.v1.final_generation.get_job", return_value=stored):
+            result = get_generation_status("job-1")
+        self.assertIn("legacy-primary/file", result["candidates"][0]["video_url"])
+        self.assertNotIn("output_path", result["candidates"][0])
+
     def test_final_status_response_preserves_safe_provenance(self):
         with patch(
             "app.api.v1.final_generation.get_job",

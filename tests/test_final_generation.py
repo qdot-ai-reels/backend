@@ -16,6 +16,7 @@ from app.api.v1.final_generation import (
     _generate_script,
     _generate_video,
     _fail_unresolved_candidates,
+    _finalize_candidate_job,
     _run_candidate,
     _script_duration_seconds,
     get_generation_status,
@@ -23,7 +24,7 @@ from app.api.v1.final_generation import (
     retry_candidate,
     router,
 )
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 from app.generation_jobs import _error_metadata, _status_message
 from app.tts_generator import SceneAudioDurationError
 from app.script_generator import ScriptDialogueLengthError
@@ -33,13 +34,13 @@ from app.video_validator import ValidationResult, VideoMetadata
 
 
 class FinalGenerationApiTests(unittest.TestCase):
-    def test_candidate_count_defaults_to_three_and_is_bounded(self):
+    def test_candidate_count_defaults_to_one_and_is_bounded(self):
         body = FinalGenerationBody(
             product={"name": "상품"},
             script={"scenes": []},
             image_url="https://example.com/product.jpg",
         )
-        self.assertEqual(body.candidate_count, 3)
+        self.assertEqual(body.candidate_count, 1)
         self.assertIsNone(body.visual_mode)
         self.assertEqual(body.square_output_strategy, "reject")
         opted_in = FinalGenerationBody(
@@ -137,13 +138,31 @@ class FinalGenerationApiTests(unittest.TestCase):
                 "SCRIPT_GENERATION",
                 "OpenRouter 요청이 거부되었습니다. HTTP 404: No endpoints available",
             ),
-            ("SCRIPT_PROVIDER_UNAVAILABLE", True),
+            ("SCRIPT_PROVIDER_UNAVAILABLE", False),
         )
 
     def test_status_metadata_identifies_video_input_failure(self):
         self.assertEqual(
             _error_metadata("FAILED", "VIDEO_GENERATION", "이미지 format is not supported"),
             ("VIDEO_INPUT_INVALID", False),
+        )
+
+    def test_provider_reconcile_failures_are_not_candidate_retryable(self):
+        self.assertEqual(
+            _error_metadata(
+                "FAILED",
+                "VIDEO_GENERATION",
+                "provider polling timeout",
+            ),
+            ("VIDEO_PROVIDER_TIMEOUT", False),
+        )
+        self.assertEqual(
+            _error_metadata(
+                "FAILED",
+                "VIDEO_GENERATION",
+                "No endpoints available",
+            ),
+            ("VIDEO_PROVIDER_UNAVAILABLE", False),
         )
 
     def test_status_message_identifies_script_regeneration(self):
@@ -159,7 +178,7 @@ class FinalGenerationApiTests(unittest.TestCase):
                 "TTS_GENERATION",
                 "3번째 장면 음성이 너무 깁니다.",
             ),
-            ("TTS_SCENE_TOO_LONG", True),
+            ("TTS_SCENE_TOO_LONG", False),
         )
 
     def test_background_video_wait_allows_late_completion(self):
@@ -207,6 +226,40 @@ class FinalGenerationApiTests(unittest.TestCase):
             pipeline_class.call_args.kwargs["square_output_strategy"],
             "reject",
         )
+
+    @patch("app.api.v1.final_generation.VideoValidationPipeline")
+    @patch("app.api.v1.final_generation.select_video_resolution", return_value="720p")
+    @patch("app.api.v1.final_generation.build_video_client")
+    @patch("app.api.v1.final_generation.get_video_model_capabilities")
+    def test_studio_resolution_snapshot_overrides_legacy_runtime_resolution(
+        self,
+        get_capabilities,
+        _build_client,
+        select_resolution,
+        pipeline_class,
+    ):
+        get_capabilities.return_value = VideoModelCapabilities(
+            model_id="video-model",
+            name="Video",
+            supported_durations=(15,),
+            supported_aspect_ratios=("9:16",),
+            supported_resolutions=("720p", "1080p"),
+            generate_audio=False,
+        )
+        pipeline_class.return_value.run.return_value = Mock()
+
+        _generate_video(
+            script={"scenes": [{"time_range_sec": {"start": 0, "end": 15}}]},
+            image_url="https://example.com/product.jpg",
+            influencer_image_url=None,
+            detail_image_urls=(),
+            service=None,
+            resolution="1080p",
+        )
+
+        request = pipeline_class.return_value.run.call_args.args[0]
+        self.assertEqual(request.resolution, "1080p")
+        select_resolution.assert_not_called()
 
     @patch("app.api.v1.final_generation.VideoValidationPipeline")
     @patch("app.api.v1.final_generation.select_video_resolution", return_value="1080p")
@@ -317,10 +370,12 @@ class FinalGenerationApiTests(unittest.TestCase):
         "app.api.v1.final_generation.get_job",
         return_value={
             "job_id": "job-1",
+            "status": "FAILED",
             "candidates": [
                 {
                     "candidate_id": "candidate-01",
                     "status": "FAILED",
+                    "retryable": True,
                     "cost": 1.25,
                     "attempts": 2,
                 }
@@ -345,6 +400,69 @@ class FinalGenerationApiTests(unittest.TestCase):
         self.assertNotIn("cost", _update_candidate.call_args.kwargs)
         self.assertNotIn("attempts", _update_candidate.call_args.kwargs)
 
+    @patch(
+        "app.api.v1.final_generation.get_job",
+        return_value={
+            "job_id": "job-1",
+            "status": "PROCESSING",
+            "candidates": [
+                {
+                    "candidate_id": "candidate-01",
+                    "status": "FAILED",
+                    "retryable": True,
+                }
+            ],
+        },
+    )
+    def test_candidate_retry_rejects_an_active_parent_job(self, _get_job):
+        with self.assertRaises(HTTPException) as context:
+            retry_candidate("job-1", "candidate-01", BackgroundTasks())
+
+        self.assertEqual(context.exception.status_code, 409)
+        self.assertIn("진행 중", context.exception.detail)
+
+    @patch(
+        "app.api.v1.final_generation.get_job",
+        return_value={
+            "job_id": "job-1",
+            "status": "FAILED",
+            "candidates": [
+                {
+                    "candidate_id": "candidate-01",
+                    "status": "FAILED",
+                    "retryable": False,
+                }
+            ],
+        },
+    )
+    def test_candidate_retry_rejects_a_non_retryable_failure(self, _get_job):
+        with self.assertRaises(HTTPException) as context:
+            retry_candidate("job-1", "candidate-01", BackgroundTasks())
+
+        self.assertEqual(context.exception.status_code, 409)
+        self.assertIn("새 견적", context.exception.detail)
+
+    @patch("app.api.v1.final_generation.update_job")
+    @patch(
+        "app.api.v1.final_generation.get_job",
+        return_value={
+            "job_id": "job-1",
+            "status": "PROCESSING",
+            "candidates": [
+                {"candidate_id": "candidate-01", "status": "COMPLETED", "cost": 1.0},
+                {"candidate_id": "candidate-02", "status": "PROCESSING", "cost": 0.0},
+            ],
+        },
+    )
+    def test_candidate_finalization_waits_for_unresolved_siblings(
+        self,
+        _get_job,
+        update_job,
+    ):
+        _finalize_candidate_job("job-1", {"scenes": []})
+
+        update_job.assert_not_called()
+
     @patch("app.api.v1.final_generation.update_job")
     @patch("app.api.v1.final_generation.update_candidate")
     @patch("app.api.v1.final_generation._generate_video")
@@ -362,7 +480,7 @@ class FinalGenerationApiTests(unittest.TestCase):
         _run_candidate(
             job_id="job-1",
             candidate_id="candidate-01",
-            payload={"product": {"name": "상품"}},
+            payload={"product": {"name": "상품"}, "resolution": "1080p"},
             script={"scenes": [{"time_range_sec": {"start": 0, "end": 4}}]},
             audio_path=Path("narration.mp3"),
             image_url="https://example.com/product.jpg",
@@ -379,6 +497,7 @@ class FinalGenerationApiTests(unittest.TestCase):
         )
         self.assertEqual(metadata_call.kwargs["attempts"], 3)
         self.assertEqual(metadata_call.kwargs["cost"], 2.0)
+        self.assertEqual(generate_video.call_args.kwargs["resolution"], "1080p")
 
     @patch("app.api.v1.final_generation.shutil.copy2")
     @patch("app.api.v1.final_generation.Path.mkdir")
@@ -722,7 +841,7 @@ class FinalGenerationApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         payload = response.json()
         self.assertEqual(payload["status"], "PENDING")
-        self.assertEqual(payload["candidate_count"], 3)
+        self.assertEqual(payload["candidate_count"], 1)
         self.assertIn(payload["job_id"], payload["status_url"])
         create_job.assert_called_once()
         self.assertEqual(

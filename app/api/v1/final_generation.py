@@ -69,7 +69,7 @@ from app.script_generator import (
     truncate_voiceover_at_boundary,
     validate_script_document,
 )
-from app.settings_service import SettingsService
+from app.settings_service import ProviderCatalogError, SettingsService
 from app.tts_generator import OpenRouterTTSClient, SceneAudioDurationError
 from app.video_generator import OpenRouterVideoClient, VideoGenerationRequest
 from app.video_metadata import read_video_metadata
@@ -92,6 +92,7 @@ BACKGROUND_VIDEO_MAX_POLL_ATTEMPTS = (
     BACKGROUND_VIDEO_MAX_WAIT_SECONDS // VIDEO_POLL_INTERVAL_SECONDS
 )
 MAX_SCRIPT_REGENERATIONS = 1
+TERMINAL_GENERATION_STATUSES = {"COMPLETED", "PARTIAL_COMPLETED", "FAILED"}
 
 
 def _script_duration_seconds(script: dict[str, Any]) -> int | None:
@@ -116,10 +117,15 @@ class FinalGenerationBody(BaseModel):
     influencer_image_urls: list[str] = Field(default_factory=list, max_length=2)
     reviews: list[Any] = Field(default_factory=list)
     prompt: str | None = None
+    cta: str | None = Field(default=None, max_length=500)
+    advertising_purpose: str | None = Field(default=None, max_length=1000)
+    must_include: str | None = Field(default=None, max_length=2000)
+    must_exclude: str | None = Field(default=None, max_length=2000)
+    extra_details: str | None = Field(default=None, max_length=4000)
     max_duration_seconds: int | None = Field(default=None, ge=1, le=30)
     channel: str = "Instagram Reels"
     target_audience: str = "육아에 관심 있는 보호자"
-    candidate_count: int = Field(default=3, ge=1, le=4)
+    candidate_count: int = Field(default=1, ge=1, le=4)
     template_id: str | None = Field(default=None, min_length=1, max_length=64)
     template_version: int | None = Field(default=None, ge=1)
     quote_id: str | None = Field(default=None, min_length=1, max_length=64)
@@ -138,6 +144,11 @@ class FinalGenerationBody(BaseModel):
             self.template_version is not None or self.quote_id is not None
         ):
             raise ValueError("template_version과 quote_id는 template_id와 함께 사용해야 합니다.")
+        if self.template_id is not None:
+            if self.quote_id is None or not self.quote_id.strip():
+                raise ValueError("template_id 생성에는 quote_id가 필요합니다.")
+            if self.client_request_id is None or not self.client_request_id.strip():
+                raise ValueError("template_id 생성에는 client_request_id가 필요합니다.")
         return self
 
 
@@ -172,7 +183,10 @@ def get_generation_templates() -> dict[str, Any]:
 def create_quote(body: GenerationQuoteBody) -> dict[str, Any]:
     try:
         template = get_generation_template(body.template_id, body.template_version)
-        model_id = _selected_video_model_id()
+        model_id = _preflight_quote_model(
+            duration_seconds=template.duration_seconds,
+            resolution=body.resolution,
+        )
         return create_generation_quote(
             QuoteSpec(
                 template_id=template.template_id,
@@ -186,6 +200,45 @@ def create_quote(body: GenerationQuoteBody) -> dict[str, Any]:
         )
     except (GenerationTemplateError, GenerationQuoteError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+def _preflight_quote_model(*, duration_seconds: int, resolution: str) -> str:
+    """Verify the selected model's read-only catalog before persisting a quote."""
+    session = None
+    try:
+        service, session = _build_settings_service()
+        capabilities = get_video_model_capabilities(service)
+    except ProviderCatalogError as error:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "VIDEO_CATALOG_UNAVAILABLE",
+                "message": "영상 모델 지원 정보를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+            },
+        ) from error
+    finally:
+        if session is not None:
+            session.close()
+
+    unsupported = []
+    if duration_seconds not in capabilities.supported_durations:
+        unsupported.append(f"{duration_seconds}초")
+    if resolution not in capabilities.supported_resolutions:
+        unsupported.append(resolution)
+    if "9:16" not in capabilities.supported_aspect_ratios:
+        unsupported.append("9:16")
+    if unsupported:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "VIDEO_MODEL_UNSUPPORTED",
+                "message": (
+                    "선택한 영상 모델이 견적 조건을 지원하지 않습니다: "
+                    + ", ".join(unsupported)
+                ),
+            },
+        )
+    return capabilities.model_id
 
 
 @router.get(
@@ -542,6 +595,11 @@ def retry_candidate(
     job = get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="생성 작업을 찾을 수 없습니다.")
+    if job.get("status") not in TERMINAL_GENERATION_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail="진행 중인 생성 작업의 후보는 다시 실행할 수 없습니다.",
+        )
     candidate = next(
         (
             item
@@ -556,6 +614,14 @@ def retry_candidate(
         raise HTTPException(
             status_code=409,
             detail="FAILED 상태의 영상 후보만 다시 생성할 수 있습니다.",
+        )
+    if candidate.get("retryable") is not True:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "이 후보는 안전한 후보 단독 재시도 대상이 아닙니다. "
+                "provider 상태 확인 또는 새 견적이 필요합니다."
+            ),
         )
     payload = get_job_payload(job_id)
     if payload is None:
@@ -812,6 +878,11 @@ def _run_candidate(
                 or SquareOutputStrategy.REJECT.value
             ),
             visual_mode=str(payload.get("visual_mode") or "product_only"),
+            resolution=(
+                str(payload["resolution"])
+                if isinstance(payload.get("resolution"), str)
+                else None
+            ),
         )
         raw_provider_validation = getattr(video_result, "provider_validation", None)
         if not isinstance(raw_provider_validation, ValidationResult):
@@ -938,6 +1009,13 @@ def _finalize_candidate_job(job_id: str, script: dict[str, Any]) -> None:
     candidates = job.get("candidates", [])
     completed = [item for item in candidates if item.get("status") == "COMPLETED"]
     failed = [item for item in candidates if item.get("status") == "FAILED"]
+    unresolved = [
+        item
+        for item in candidates
+        if item.get("status") in {"PENDING", "PROCESSING"}
+    ]
+    if unresolved:
+        return
     total_cost = sum(float(item.get("cost") or 0.0) for item in candidates)
     if completed and not failed:
         final_status = "COMPLETED"
@@ -1172,6 +1250,7 @@ def _generate_video(
     candidate_id: str | None = None,
     square_output_strategy: str = SquareOutputStrategy.REJECT.value,
     visual_mode: str = "product_only",
+    resolution: str | None = None,
 ):
     influencer_image_urls = (
         influencer_image_url
@@ -1210,7 +1289,7 @@ def _generate_video(
     request = VideoGenerationRequest(
         script=script,
         image_url=image_url,
-        resolution=select_video_resolution(service, capabilities),
+        resolution=resolution or select_video_resolution(service, capabilities),
         aspect_ratio="9:16",
         generate_audio=False,
         influencer_image_urls=influencer_image_urls,

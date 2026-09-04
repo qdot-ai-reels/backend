@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     DateTime,
     Float,
+    Index,
     Integer,
     Numeric,
     String,
@@ -53,6 +54,15 @@ class GlobalSettingsRow(Base):
 
 class GenerationJobRow(Base):
     __tablename__ = "generation_jobs"
+    __table_args__ = (
+        Index("ix_generation_jobs_created_at_job_id", "created_at", "job_id"),
+        Index(
+            "ix_generation_jobs_status_created_at_job_id",
+            "status",
+            "created_at",
+            "job_id",
+        ),
+    )
 
     job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     status: Mapped[str] = mapped_column(String(32), default="PENDING")
@@ -176,6 +186,19 @@ def init_db() -> None:
                 "CREATE UNIQUE INDEX IF NOT EXISTS "
                 "ix_generation_jobs_client_request_id "
                 "ON generation_jobs (client_request_id)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_generation_jobs_created_at_job_id "
+                "ON generation_jobs (created_at, job_id)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_generation_jobs_status_created_at_job_id "
+                "ON generation_jobs (status, created_at, job_id)"
             )
         )
         if "openrouter_api_key_encrypted" in columns and "openrouter_script_api_key_encrypted" not in columns:

@@ -13,6 +13,41 @@ from sqlalchemy import and_, or_, select
 from app.db import GenerationJobRow, SessionLocal
 
 
+PUBLIC_ERROR_MESSAGES = {
+    "VIDEO_INPUT_INVALID": "입력 이미지가 영상 생성 정책 또는 형식 검증을 통과하지 못했습니다.",
+    "SCRIPT_PROVIDER_UNAVAILABLE": "스크립트 생성 서비스를 현재 사용할 수 없습니다.",
+    "SCRIPT_PROVIDER_ERROR": "스크립트 생성 서비스 요청에 실패했습니다.",
+    "SCRIPT_GENERATION_FAILED": "스크립트를 생성하지 못했습니다.",
+    "TTS_SCENE_TOO_LONG": "장면 음성이 허용 길이를 초과했습니다.",
+    "TTS_GENERATION_FAILED": "음성을 생성하지 못했습니다.",
+    "VIDEO_PROVIDER_UNAVAILABLE": "영상 생성 서비스를 현재 사용할 수 없습니다. 새 견적이 필요합니다.",
+    "VIDEO_PROVIDER_TIMEOUT": "영상 생성 상태 확인이 지연되고 있습니다. 운영자 확인이 필요합니다.",
+    "VIDEO_GENERATION_FAILED": "영상 후보를 생성하지 못했습니다. 새 견적이 필요합니다.",
+    "AUDIO_MERGE_FAILED": "영상과 음성을 결합하지 못했습니다.",
+    "CAPTION_RENDER_FAILED": "영상 자막을 렌더링하지 못했습니다.",
+    "GENERATION_FAILED": "영상 생성 작업을 완료하지 못했습니다.",
+}
+UNSAFE_CANDIDATE_RETRY_CODES = frozenset(PUBLIC_ERROR_MESSAGES)
+PUBLIC_CANDIDATE_FIELDS = frozenset(
+    {
+        "candidate_id",
+        "index",
+        "status",
+        "stage",
+        "provider_job_id",
+        "caption_job_id",
+        "output_path",
+        "attempts",
+        "cost",
+        "validation",
+        "error",
+        "error_code",
+        "retryable",
+        "legacy_artifact",
+    }
+)
+
+
 def create_job(
     job_id: str,
     *,
@@ -192,8 +227,8 @@ def list_generation_jobs(
 
 
 def _job_response(row: GenerationJobRow) -> dict[str, Any]:
-    error_code, retryable = _error_metadata(row.status, row.stage, row.error_message)
-    candidates = _json_list(row.candidates_json)
+    candidates = [_public_candidate(item) for item in _job_candidates(row)]
+    public_error = _job_public_error(row, candidates)
     completed_candidates = sum(
         item.get("status") == "COMPLETED" for item in candidates
     )
@@ -207,14 +242,12 @@ def _job_response(row: GenerationJobRow) -> dict[str, Any]:
         "video_job_id": row.video_job_id,
         "caption_job_id": row.caption_job_id,
         "output_path": row.output_path,
-        "error": row.error_message,
-        "error_code": error_code,
-        "retryable": retryable,
+        "error": public_error["message"] if public_error else None,
+        "error_code": public_error["code"] if public_error else None,
+        "retryable": public_error["retryable"] if public_error else None,
         "cost": row.cost,
         "candidate_count": (
-            row.candidate_count
-            if row.candidate_count is not None
-            else len(candidates)
+            int(row.candidate_count or 0) or len(candidates)
         ),
         "completed_candidates": completed_candidates,
         "failed_candidates": failed_candidates,
@@ -231,6 +264,7 @@ def _job_response(row: GenerationJobRow) -> dict[str, Any]:
     response["duration_seconds"] = summary["duration_seconds"]
     response["asset_fidelity"] = summary["asset_fidelity"]
     response["cost_summary"] = summary["cost"]
+    response["options"] = _options_summary(row.payload_json)
     return response
 
 
@@ -242,13 +276,13 @@ def _job_summary(row: GenerationJobRow) -> dict[str, Any]:
         if isinstance(product_document.get("product"), dict)
         else product_document
     )
-    candidates = _json_list(row.candidates_json)
+    candidates = [_public_candidate(item) for item in _job_candidates(row)]
     completed = [item for item in candidates if item.get("status") == "COMPLETED"]
     failed = [item for item in candidates if item.get("status") == "FAILED"]
     primary = completed[0] if completed else None
     script = _json_dict(row.script_json)
     template = _template_summary(payload, script)
-    error_code, retryable = _error_metadata(row.status, row.stage, row.error_message)
+    public_error = _job_public_error(row, candidates)
     quote = payload.get("quote") if isinstance(payload.get("quote"), dict) else {}
     quote_total = quote.get("total") if isinstance(quote.get("total"), dict) else {}
     product_id = _first_string(product, "product_id", "id", "uuid")
@@ -291,7 +325,7 @@ def _job_summary(row: GenerationJobRow) -> dict[str, Any]:
         "duration_seconds": template.get("duration_seconds") if template else _script_duration(script),
         "visual_mode": _visual_provenance(row.payload_json).get("visual_mode", "product_only"),
         "candidates": {
-            "total": row.candidate_count if row.candidate_count is not None else len(candidates),
+            "total": int(row.candidate_count or 0) or len(candidates),
             "completed": len(completed),
             "failed": len(failed),
         },
@@ -305,13 +339,7 @@ def _job_summary(row: GenerationJobRow) -> dict[str, Any]:
         },
         "primary_candidate": primary_candidate,
         "error": (
-            {
-                "code": error_code,
-                "message": row.error_message,
-                "retryable": retryable,
-            }
-            if row.error_message
-            else None
+            public_error if row.error_message or public_error else None
         ),
         "asset_fidelity": {
             "package_text_verified": package_text_verified,
@@ -344,6 +372,103 @@ def _json_list(raw: str | None) -> list[dict[str, Any]]:
     except (json.JSONDecodeError, TypeError):
         return []
     return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _job_candidates(row: GenerationJobRow) -> list[dict[str, Any]]:
+    """Return stored candidates or one playable response-only legacy artifact."""
+    candidates = _json_list(row.candidates_json)
+    if (
+        not candidates
+        and row.status in {"COMPLETED", "PARTIAL_COMPLETED"}
+        and row.output_path
+    ):
+        return [
+            {
+                "candidate_id": "legacy-primary",
+                "index": 1,
+                "status": "COMPLETED",
+                "stage": "COMPLETED",
+                "provider_job_id": row.video_job_id,
+                "caption_job_id": row.caption_job_id,
+                "output_path": row.output_path,
+                "attempts": 0,
+                "cost": row.cost,
+                "validation": None,
+                "error": None,
+                "error_code": None,
+                "retryable": False,
+                "legacy_artifact": True,
+            }
+        ]
+    return candidates
+
+
+def _public_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Sanitize candidate failure evidence while leaving DB JSON untouched."""
+    result = {
+        key: candidate[key]
+        for key in PUBLIC_CANDIDATE_FIELDS
+        if key in candidate
+    }
+    raw_error = candidate.get("error")
+    stored_code = candidate.get("error_code")
+    if not raw_error and not stored_code:
+        result["error"] = None
+        result["error_code"] = None
+        result["retryable"] = False if candidate.get("status") == "COMPLETED" else None
+        return result
+
+    derived_code, _derived_retryable = _error_metadata(
+        str(candidate.get("status") or "FAILED"),
+        str(candidate.get("stage") or ""),
+        str(raw_error or ""),
+    )
+    code = (
+        stored_code
+        if isinstance(stored_code, str) and stored_code in PUBLIC_ERROR_MESSAGES
+        else derived_code or "GENERATION_FAILED"
+    )
+    result["error"] = PUBLIC_ERROR_MESSAGES.get(
+        code,
+        PUBLIC_ERROR_MESSAGES["GENERATION_FAILED"],
+    )
+    result["error_code"] = code
+    result["retryable"] = bool(candidate.get("retryable")) and (
+        code not in UNSAFE_CANDIDATE_RETRY_CODES
+    )
+    return result
+
+
+def _job_public_error(
+    row: GenerationJobRow,
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not row.error_message:
+        return None
+    failed_candidate = next(
+        (
+            item
+            for item in candidates
+            if item.get("status") == "FAILED" and item.get("error_code")
+        ),
+        None,
+    )
+    if failed_candidate is not None:
+        return {
+            "code": failed_candidate["error_code"],
+            "message": failed_candidate["error"],
+            "retryable": bool(failed_candidate.get("retryable")),
+        }
+    code, retryable = _error_metadata(row.status, row.stage, row.error_message)
+    code = code or "GENERATION_FAILED"
+    return {
+        "code": code,
+        "message": PUBLIC_ERROR_MESSAGES.get(
+            code,
+            PUBLIC_ERROR_MESSAGES["GENERATION_FAILED"],
+        ),
+        "retryable": bool(retryable),
+    }
 
 
 def _first_string(source: dict[str, Any], *keys: str) -> str | None:
@@ -398,6 +523,40 @@ def _workflow_provenance(payload_json: str | None) -> dict[str, Any]:
             "expires_at": quote.get("expires_at"),
         }
     return result
+
+
+def _options_summary(payload_json: str | None) -> dict[str, Any]:
+    """Expose only the Studio controls intentionally safe for job detail."""
+    payload = _json_dict(payload_json) or {}
+    maximum_lengths = {
+        "channel": 200,
+        "cta": 500,
+        "advertising_purpose": 1000,
+        "must_include": 2000,
+        "must_exclude": 2000,
+        "extra_details": 4000,
+    }
+
+    def text_value(key: str) -> str | None:
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip():
+            return None
+        return value.strip()[: maximum_lengths[key]]
+
+    visual_mode = payload.get("visual_mode")
+    return {
+        "visual_mode": (
+            visual_mode
+            if visual_mode in {"product_only", "model_included", "generated_model"}
+            else None
+        ),
+        "channel": text_value("channel"),
+        "cta": text_value("cta"),
+        "advertising_purpose": text_value("advertising_purpose"),
+        "must_include": text_value("must_include"),
+        "must_exclude": text_value("must_exclude"),
+        "extra_details": text_value("extra_details"),
+    }
 
 
 def _encode_cursor(created_at: datetime, job_id: str) -> str:
@@ -531,19 +690,19 @@ def _error_metadata(
         return "VIDEO_INPUT_INVALID", False
     if stage in {"SCRIPT_GENERATION", "SCRIPT_REGENERATION"}:
         if "no endpoints available" in message:
-            return "SCRIPT_PROVIDER_UNAVAILABLE", True
+            return "SCRIPT_PROVIDER_UNAVAILABLE", False
         if "openrouter" in message:
-            return "SCRIPT_PROVIDER_ERROR", True
+            return "SCRIPT_PROVIDER_ERROR", False
         return "SCRIPT_GENERATION_FAILED", False
     if stage in {"TTS_GENERATION", "TTS_VALIDATION", "TTS_FALLBACK"}:
         if "음성이 너무 깁니다" in (error_message or ""):
-            return "TTS_SCENE_TOO_LONG", True
+            return "TTS_SCENE_TOO_LONG", False
         return "TTS_GENERATION_FAILED", False
     if stage == "VIDEO_GENERATION":
         if "no endpoints available" in message:
-            return "VIDEO_PROVIDER_UNAVAILABLE", True
+            return "VIDEO_PROVIDER_UNAVAILABLE", False
         if "시간이 초과" in (error_message or "") or "timeout" in message:
-            return "VIDEO_PROVIDER_TIMEOUT", True
+            return "VIDEO_PROVIDER_TIMEOUT", False
         if "이미지" in (error_message or "") or "format" in message:
             return "VIDEO_INPUT_INVALID", False
         return "VIDEO_GENERATION_FAILED", False
