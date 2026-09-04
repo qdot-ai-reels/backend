@@ -11,8 +11,9 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+from pydantic import BaseModel, Field, model_validator
+from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.caption import render_captioned_video_file
 from app.api.v1.video import publish_validated_video, select_video_resolution
@@ -22,9 +23,27 @@ from app.generation_jobs import (
     _error_metadata,
     create_job,
     get_job,
+    get_job_idempotency,
     get_job_payload,
+    list_generation_jobs,
     update_candidate,
     update_job,
+)
+from app.generation_quotes import (
+    GenerationQuoteError,
+    GenerationQuoteExpiredError,
+    GenerationQuoteMismatchError,
+    QuoteSpec,
+    canonical_request_hash,
+    create_generation_quote,
+    validate_generation_quote,
+)
+from app.generation_templates import (
+    GenerationTemplateError,
+    get_generation_template,
+    list_generation_templates,
+    normalize_generated_script_to_plan,
+    validate_script_matches_template,
 )
 from app.generation_dispatcher import InProcessGenerationDispatcher
 from app.image_metadata import (
@@ -37,19 +56,22 @@ from app.runtime_config import (
     build_tts_settings,
     build_video_client,
     get_video_model_capabilities,
+    resolve_exact_script_generation_duration,
     resolve_script_generation_duration,
 )
 from app.script_generator import (
     DEFAULT_SYLLABLES_PER_SECOND,
     ScriptDialogueLengthError,
     ScriptGenerationRequest,
+    ScriptValidationError,
     count_speech_syllables,
     normalize_script_subtitles,
     truncate_voiceover_at_boundary,
+    validate_script_document,
 )
 from app.settings_service import SettingsService
 from app.tts_generator import OpenRouterTTSClient, SceneAudioDurationError
-from app.video_generator import VideoGenerationRequest
+from app.video_generator import OpenRouterVideoClient, VideoGenerationRequest
 from app.video_metadata import read_video_metadata
 from app.video_validation_pipeline import (
     PipelineStatus,
@@ -88,7 +110,7 @@ class FinalGenerationBody(BaseModel):
     """Accept product context together with the script to be rendered."""
 
     product: dict[str, Any] = Field(min_length=1)
-    script: dict[str, Any] = Field(min_length=1)
+    script: dict[str, Any] | None = Field(default=None, min_length=1)
     image_url: str | None = Field(default=None, min_length=1)
     influencer_image_url: str | None = Field(default=None, min_length=1)
     influencer_image_urls: list[str] = Field(default_factory=list, max_length=2)
@@ -98,10 +120,102 @@ class FinalGenerationBody(BaseModel):
     channel: str = "Instagram Reels"
     target_audience: str = "육아에 관심 있는 보호자"
     candidate_count: int = Field(default=3, ge=1, le=4)
+    template_id: str | None = Field(default=None, min_length=1, max_length=64)
+    template_version: int | None = Field(default=None, ge=1)
+    quote_id: str | None = Field(default=None, min_length=1, max_length=64)
+    client_request_id: str | None = Field(default=None, min_length=1, max_length=128)
+    resolution: Literal["1080p"] = "1080p"
     visual_mode: Literal[
         "product_only", "model_included", "generated_model"
     ] | None = None
     square_output_strategy: Literal["reject", "center_crop"] = "reject"
+
+    @model_validator(mode="after")
+    def validate_workflow_input(self) -> "FinalGenerationBody":
+        if self.script is None and self.template_id is None:
+            raise ValueError("script 또는 template_id 중 하나가 필요합니다.")
+        if self.template_id is None and (
+            self.template_version is not None or self.quote_id is not None
+        ):
+            raise ValueError("template_version과 quote_id는 template_id와 함께 사용해야 합니다.")
+        return self
+
+
+class GenerationQuoteBody(BaseModel):
+    template_id: str = Field(min_length=1, max_length=64)
+    template_version: int | None = Field(default=None, ge=1)
+    candidate_count: int = Field(default=1, ge=1, le=4)
+    visual_mode: Literal[
+        "product_only", "model_included", "generated_model"
+    ] = "generated_model"
+    resolution: Literal["1080p"] = "1080p"
+
+
+@router.get(
+    "/generation-templates",
+    status_code=status.HTTP_200_OK,
+    summary="Studio 영상 전략 템플릿 목록",
+)
+def get_generation_templates() -> dict[str, Any]:
+    templates = [template.to_public() for template in list_generation_templates()]
+    return {
+        "items": templates,
+        "default_template_id": "ugc_full_15",
+    }
+
+
+@router.post(
+    "/generation-quotes",
+    status_code=status.HTTP_201_CREATED,
+    summary="영상 생성 전 비용 견적 저장",
+)
+def create_quote(body: GenerationQuoteBody) -> dict[str, Any]:
+    try:
+        template = get_generation_template(body.template_id, body.template_version)
+        model_id = _selected_video_model_id()
+        return create_generation_quote(
+            QuoteSpec(
+                template_id=template.template_id,
+                template_version=template.version,
+                duration_seconds=template.duration_seconds,
+                candidate_count=body.candidate_count,
+                visual_mode=body.visual_mode,
+                resolution=body.resolution,
+            ),
+            model_id=model_id,
+        )
+    except (GenerationTemplateError, GenerationQuoteError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.get(
+    "/generations",
+    status_code=status.HTTP_200_OK,
+    summary="생성 영상 관리 목록",
+)
+def get_generations(
+    limit: int = Query(default=24, ge=1, le=100),
+    cursor: str | None = Query(default=None, min_length=1, max_length=1024),
+    job_status: str | None = Query(default=None, alias="status", min_length=1, max_length=32),
+) -> dict[str, Any]:
+    try:
+        return list_generation_jobs(limit=limit, cursor=cursor, status=job_status)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+def _selected_video_model_id() -> str:
+    environment_model = OpenRouterVideoClient.from_env().model
+    service = None
+    session = None
+    try:
+        service, session = _build_settings_service()
+        if service is None:
+            return environment_model
+        return service.get_runtime_settings().openrouter_video_model or environment_model
+    finally:
+        if session is not None:
+            session.close()
 
 
 def validate_product_image_inputs(
@@ -160,13 +274,43 @@ def resolve_influencer_image_urls(payload: dict[str, Any]) -> tuple[str, ...]:
 @router.post("/generate", status_code=status.HTTP_202_ACCEPTED, summary="상품 데이터와 스크립트로 전체 릴스 생성 작업 시작")
 def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTasks) -> dict[str, Any]:
     job_id = uuid.uuid4().hex
-    input_type = "product_and_script"
+    input_type = "product_template" if body.script is None else "product_and_script"
     image_url = body.image_url or _extract_image_url(body.product)
     if not image_url:
         raise HTTPException(status_code=422, detail="상품 이미지 URL이 필요합니다.")
     payload = body.model_dump()
     try:
+        template = (
+            get_generation_template(body.template_id, body.template_version)
+            if body.template_id
+            else None
+        )
+        if template is not None:
+            if (
+                body.max_duration_seconds is not None
+                and body.max_duration_seconds != template.duration_seconds
+            ):
+                raise GenerationTemplateError(
+                    "max_duration_seconds는 선택한 템플릿 길이와 같아야 합니다."
+                )
+            payload["template"] = template.to_public()
+            payload["template_id"] = template.template_id
+            payload["template_version"] = template.version
+            payload["max_duration_seconds"] = template.duration_seconds
+            if body.script is not None:
+                supplied_script = validate_script_document(
+                    normalize_script_subtitles(body.script),
+                    max_duration_seconds=template.duration_seconds,
+                )
+                payload["script"] = validate_script_matches_template(
+                    supplied_script,
+                    template,
+                )
         influencer_image_urls = resolve_influencer_image_urls(payload)
+        effective_visual_mode = payload.get("visual_mode") or (
+            "model_included" if influencer_image_urls else "product_only"
+        )
+        payload["visual_mode"] = effective_visual_mode
         if (
             body.square_output_strategy == SquareOutputStrategy.CENTER_CROP.value
             and influencer_image_urls
@@ -180,32 +324,142 @@ def start_generation(body: FinalGenerationBody, background_tasks: BackgroundTask
             influencer_image_urls,
         )
         validate_normalized_influencer_references(influencer_image_urls)
-    except ValueError as error:
+    except (GenerationTemplateError, ScriptValidationError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     payload["image_url"] = image_url
     payload["influencer_image_urls"] = list(influencer_image_urls)
     payload["influencer_image_url"] = None
-    create_job(
-        job_id,
-        input_type=input_type,
-        product=body.product,
-        script=body.script,
-        image_url=image_url,
-        payload=payload,
-        candidate_count=body.candidate_count,
-    )
+    request_payload = dict(payload)
+    request_payload.pop("client_request_id", None)
+    request_hash = canonical_request_hash(request_payload)
+
+    if body.client_request_id:
+        existing = get_job_idempotency(body.client_request_id)
+        if existing is not None:
+            existing_job_id, existing_hash = existing
+            if existing_hash != request_hash:
+                raise HTTPException(
+                    status_code=409,
+                    detail="client_request_id가 다른 생성 요청에 이미 사용되었습니다.",
+                )
+            return _generation_replay_response(
+                existing_job_id,
+                body.candidate_count,
+                payload,
+            )
+
+    if template is not None and body.quote_id:
+        spec = QuoteSpec(
+            template_id=template.template_id,
+            template_version=template.version,
+            duration_seconds=template.duration_seconds,
+            candidate_count=body.candidate_count,
+            visual_mode=str(payload["visual_mode"]),
+            resolution=body.resolution,
+        )
+        try:
+            payload["quote"] = validate_generation_quote(
+                body.quote_id,
+                spec,
+                model_id=_selected_video_model_id(),
+            )
+        except GenerationQuoteExpiredError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except GenerationQuoteMismatchError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except GenerationQuoteError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    try:
+        create_job(
+            job_id,
+            input_type=input_type,
+            product=body.product,
+            script=payload.get("script"),
+            image_url=image_url,
+            payload=payload,
+            candidate_count=body.candidate_count,
+            client_request_id=body.client_request_id,
+            request_hash=request_hash,
+        )
+    except IntegrityError as error:
+        existing = (
+            get_job_idempotency(body.client_request_id)
+            if body.client_request_id
+            else None
+        )
+        if existing is None or existing[1] != request_hash:
+            raise HTTPException(
+                status_code=409,
+                detail="동일한 client_request_id의 생성 요청이 이미 존재합니다.",
+            ) from error
+        return _generation_replay_response(
+            existing[0],
+            body.candidate_count,
+            payload,
+        )
     # This is intentionally isolated behind FastAPI's dispatcher boundary. The
     # persisted payload/candidate states allow a production queue worker to call
     # run_generation_job without changing the API contract.
     InProcessGenerationDispatcher(background_tasks).enqueue(
         run_generation_job, job_id, payload
     )
-    return {
+    return _generation_start_response(job_id, body.candidate_count, payload)
+
+
+def _generation_start_response(
+    job_id: str,
+    candidate_count: int,
+    payload: dict[str, Any],
+    *,
+    idempotent_replay: bool = False,
+) -> dict[str, Any]:
+    response = {
         "job_id": job_id,
         "status": "PENDING",
-        "candidate_count": body.candidate_count,
+        "stage": "QUEUED",
+        "candidate_count": candidate_count,
         "status_url": f"/api/v1/reels/generate/{job_id}",
+        "idempotent_replay": idempotent_replay,
     }
+    if isinstance(payload.get("template"), dict):
+        response["template"] = {
+            "id": payload["template"].get("id"),
+            "version": payload["template"].get("version"),
+            "duration_seconds": payload["template"].get("duration_seconds"),
+        }
+    if isinstance(payload.get("quote"), dict):
+        response["quote"] = {
+            "quote_id": payload["quote"].get("quote_id"),
+            "currency": payload["quote"].get("currency"),
+            "total": payload["quote"].get("total"),
+            "coverage": payload["quote"].get("coverage"),
+        }
+    return response
+
+
+def _generation_replay_response(
+    job_id: str,
+    candidate_count: int,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    job = get_job(job_id)
+    replay_payload = dict(payload)
+    if job is not None:
+        if isinstance(job.get("template"), dict):
+            replay_payload["template"] = job["template"]
+        if isinstance(job.get("quote"), dict):
+            replay_payload["quote"] = job["quote"]
+    response = _generation_start_response(
+        job_id,
+        int((job.get("candidate_count") if job else None) or candidate_count),
+        replay_payload,
+        idempotent_replay=True,
+    )
+    if job is not None:
+        response["status"] = job.get("status", response["status"])
+        response["stage"] = job.get("stage", response["stage"])
+    return response
 
 
 @router.get("/generate/{job_id}", status_code=status.HTTP_200_OK, summary="전체 릴스 생성 작업 상태 조회")
@@ -399,7 +653,11 @@ def run_candidate_retry(
 
 def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
     """Generate shared narration, then persist each candidate independently."""
-    current_stage = "TTS_GENERATION"
+    current_stage = (
+        "SCRIPT_GENERATION"
+        if not isinstance(payload.get("script"), dict)
+        else "TTS_GENERATION"
+    )
     update_job(job_id, status="PROCESSING", stage=current_stage)
 
     def set_stage(stage: str) -> None:
@@ -411,8 +669,19 @@ def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
     session = None
     try:
         service, session = _build_settings_service()
-        script = payload["script"]
+        script = payload.get("script")
+        if not isinstance(script, dict):
+            set_stage("SCRIPT_GENERATION")
+            script = _generate_script(payload, service)
+            payload["script"] = script
+            update_job(
+                job_id,
+                script_json=json.dumps(script, ensure_ascii=False),
+                payload_json=json.dumps(payload, ensure_ascii=False),
+            )
         image_url = payload.get("image_url") or _extract_image_url(payload.get("product"))
+        if not image_url:
+            raise ValueError("영상 생성에 필요한 상품 이미지가 없습니다.")
         influencer_image_urls = resolve_influencer_image_urls(payload)
         script, audio_content = _generate_narration_with_script_regeneration(
             payload,
@@ -840,11 +1109,22 @@ def _generate_script(
 ) -> dict[str, Any]:
     raw = payload.get("product") or {}
     product = raw.get("product") if isinstance(raw.get("product"), dict) else raw
-    max_duration_seconds, supported_durations = resolve_script_generation_duration(
-        payload.get("max_duration_seconds")
-        or (service.get_runtime_settings().video_max_duration_seconds if service else 15),
-        service,
-    )
+    template = None
+    template_id = payload.get("template_id")
+    if isinstance(template_id, str) and template_id:
+        template = get_generation_template(template_id, payload.get("template_version"))
+        max_duration_seconds, supported_durations = (
+            resolve_exact_script_generation_duration(
+                template.duration_seconds,
+                service,
+            )
+        )
+    else:
+        max_duration_seconds, supported_durations = resolve_script_generation_duration(
+            payload.get("max_duration_seconds")
+            or (service.get_runtime_settings().video_max_duration_seconds if service else 15),
+            service,
+        )
     custom_prompt = payload.get("prompt")
     retry_instruction = None
     if retry_error is not None:
@@ -862,12 +1142,24 @@ def _generate_script(
         target_audience=payload.get("target_audience", "육아에 관심 있는 보호자"),
         supported_video_durations=supported_durations,
         retry_instruction=retry_instruction,
+        template_scene_plan=(template.prompt_scene_plan() if template else None),
     )
     client = build_script_client(service)
-    return client.generate_script(
+    generated = client.generate_script(
         request,
         max_attempts=1 if retry_error is not None else None,
     )
+    if template is None:
+        return generated
+    normalized = normalize_generated_script_to_plan(
+        generated,
+        template.prompt_scene_plan(),
+    )
+    validated = validate_script_document(
+        normalized,
+        max_duration_seconds=template.duration_seconds,
+    )
+    return validate_script_matches_template(validated, template)
 
 
 def _generate_video(

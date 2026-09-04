@@ -14,6 +14,11 @@ from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from app.generation_templates import (
+    GenerationTemplateError,
+    normalize_generated_script_to_plan,
+)
+
 
 DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "openai/gpt-5.4-mini"
@@ -284,6 +289,7 @@ class ScriptGenerationRequest:
     target_audience: str = "육아에 관심 있는 보호자"
     supported_video_durations: tuple[int, ...] | None = None
     retry_instruction: str | None = None
+    template_scene_plan: tuple[Mapping[str, Any], ...] | None = None
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_duration_seconds <= MAX_SCRIPT_DURATION_SECONDS:
@@ -376,6 +382,20 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
         {"production_constraints": custom_prompt},
         ensure_ascii=False,
     )
+    template_plan = ""
+    if request.template_scene_plan:
+        plan_lines = [
+            (
+                f"- {scene['label']}: {scene['start_seconds']:g}~"
+                f"{scene['end_seconds']:g}초"
+            )
+            for scene in request.template_scene_plan
+        ]
+        template_plan = (
+            "\n### 선택된 영상 템플릿\n"
+            "아래 scene 개수, 순서, section 이름과 time_range_sec를 정확히 사용하세요.\n"
+            + "\n".join(plan_lines)
+        )
     return f"""
 당신은 공동구매 광고 숏폼 스크립트 작성자입니다.
 
@@ -387,6 +407,8 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 (2) 과대광고성 문구(효능 과장, 근거 없는 내용 등)를 포함하지 말아야 한다.
 (3) 지나치게 과장하지 말아야 한다.
 (4) 실제 사용자의 사용담 처럼 허위 경험이 들어가면 안된다.
+(5) 포장 수량, 구성 개수, 라벨의 작은 글자와 숫자는 상품 데이터에서 검증된 값으로 명시된 경우에만 주장한다.
+(6) 검증되지 않은 포장 수량이나 문구를 영상 소품, 자막, 대사로 새로 만들지 않는다.
 
 #### 2. 상품 정보
 (1) 비어있는 상품 정보들 중에, 유저가 프롬프트를 통해 해당 상품정보를 입력해주었다면, 이를 반영하여 비어 있는 상품 정보를 채워넣어라.
@@ -455,6 +477,7 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - CTA Action: {cta_action}
 - Video duration: {request.max_duration_seconds}
 - Upload Channel: {request.channel}
+{template_plan}
 
 ### 상품 정보
 {product_prompt_fields}
@@ -1058,6 +1081,14 @@ class OpenRouterClient:
             raise ScriptValidationError("OpenRouter 응답에 choices.message.content가 없습니다.") from error
 
         normalized = normalize_script_subtitles(extract_script_json(content))
+        if request.template_scene_plan:
+            try:
+                normalized = normalize_generated_script_to_plan(
+                    normalized,
+                    request.template_scene_plan,
+                )
+            except GenerationTemplateError as error:
+                raise ScriptValidationError(str(error)) from error
         structurally_valid = validate_script_document(
             normalized,
             max_duration_seconds=request.max_duration_seconds,

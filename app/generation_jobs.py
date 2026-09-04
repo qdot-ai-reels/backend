@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from app.db import GenerationJobRow, SessionLocal
 
@@ -20,6 +22,8 @@ def create_job(
     image_url: str | None,
     payload: dict[str, Any] | None = None,
     candidate_count: int = 0,
+    client_request_id: str | None = None,
+    request_hash: str | None = None,
 ) -> None:
     candidates = [
         {
@@ -54,6 +58,8 @@ def create_job(
                 image_url=image_url,
                 candidate_count=candidate_count,
                 candidates_json=json.dumps(candidates, ensure_ascii=False),
+                client_request_id=client_request_id,
+                request_hash=request_hash,
             )
         )
         session.commit()
@@ -134,42 +140,291 @@ def update_candidate(
 def get_job(job_id: str) -> dict[str, Any] | None:
     with SessionLocal() as session:
         row = session.get(GenerationJobRow, job_id)
+        return _job_response(row) if row is not None else None
+
+
+def get_job_idempotency(client_request_id: str) -> tuple[str, str | None] | None:
+    """Resolve one public idempotency key without exposing the persisted payload."""
+    with SessionLocal() as session:
+        row = session.scalar(
+            select(GenerationJobRow).where(
+                GenerationJobRow.client_request_id == client_request_id
+            )
+        )
         if row is None:
             return None
-        error_code, retryable = _error_metadata(row.status, row.stage, row.error_message)
-        candidates = json.loads(row.candidates_json or "[]")
-        completed_candidates = sum(
-            item.get("status") == "COMPLETED" for item in candidates
+        return row.job_id, row.request_hash
+
+
+def list_generation_jobs(
+    *,
+    limit: int = 24,
+    cursor: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    """Return an opaque-cursor page containing public, management-safe summaries."""
+    statement = select(GenerationJobRow)
+    if status:
+        statement = statement.where(GenerationJobRow.status == status)
+    if cursor:
+        cursor_created_at, cursor_job_id = _decode_cursor(cursor)
+        statement = statement.where(
+            or_(
+                GenerationJobRow.created_at < cursor_created_at,
+                and_(
+                    GenerationJobRow.created_at == cursor_created_at,
+                    GenerationJobRow.job_id < cursor_job_id,
+                ),
+            )
         )
-        failed_candidates = sum(item.get("status") == "FAILED" for item in candidates)
-        response = {
-            "job_id": row.job_id,
-            "status": row.status,
-            "stage": row.stage,
-            "input_type": row.input_type,
-            "script": json.loads(row.script_json) if row.script_json else None,
-            "video_job_id": row.video_job_id,
-            "caption_job_id": row.caption_job_id,
-            "output_path": row.output_path,
-            "error": row.error_message,
-            "error_code": error_code,
-            "retryable": retryable,
-            "cost": row.cost,
-            "candidate_count": (
-                row.candidate_count
-                if row.candidate_count is not None
-                else len(candidates)
+    statement = statement.order_by(
+        GenerationJobRow.created_at.desc(), GenerationJobRow.job_id.desc()
+    ).limit(limit + 1)
+    with SessionLocal() as session:
+        rows = list(session.scalars(statement))
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        items = [_job_summary(row) for row in page]
+    next_cursor = None
+    if has_more and page:
+        next_cursor = _encode_cursor(page[-1].created_at, page[-1].job_id)
+    return {"items": items, "next_cursor": next_cursor}
+
+
+def _job_response(row: GenerationJobRow) -> dict[str, Any]:
+    error_code, retryable = _error_metadata(row.status, row.stage, row.error_message)
+    candidates = _json_list(row.candidates_json)
+    completed_candidates = sum(
+        item.get("status") == "COMPLETED" for item in candidates
+    )
+    failed_candidates = sum(item.get("status") == "FAILED" for item in candidates)
+    response = {
+        "job_id": row.job_id,
+        "status": row.status,
+        "stage": row.stage,
+        "input_type": row.input_type,
+        "script": _json_dict(row.script_json),
+        "video_job_id": row.video_job_id,
+        "caption_job_id": row.caption_job_id,
+        "output_path": row.output_path,
+        "error": row.error_message,
+        "error_code": error_code,
+        "retryable": retryable,
+        "cost": row.cost,
+        "candidate_count": (
+            row.candidate_count
+            if row.candidate_count is not None
+            else len(candidates)
+        ),
+        "completed_candidates": completed_candidates,
+        "failed_candidates": failed_candidates,
+        "candidates": candidates,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "elapsed_seconds": _elapsed_seconds(row.created_at, row.updated_at, row.status),
+        "message": _status_message(row.status, row.stage, row.input_type),
+    }
+    response.update(_visual_provenance(row.payload_json))
+    response.update(_workflow_provenance(row.payload_json))
+    summary = _job_summary(row)
+    response["product"] = summary["product"]
+    response["duration_seconds"] = summary["duration_seconds"]
+    response["asset_fidelity"] = summary["asset_fidelity"]
+    response["cost_summary"] = summary["cost"]
+    return response
+
+
+def _job_summary(row: GenerationJobRow) -> dict[str, Any]:
+    payload = _json_dict(row.payload_json) or {}
+    product_document = _json_dict(getattr(row, "product_json", None)) or {}
+    product = (
+        product_document.get("product")
+        if isinstance(product_document.get("product"), dict)
+        else product_document
+    )
+    candidates = _json_list(row.candidates_json)
+    completed = [item for item in candidates if item.get("status") == "COMPLETED"]
+    failed = [item for item in candidates if item.get("status") == "FAILED"]
+    primary = completed[0] if completed else None
+    script = _json_dict(row.script_json)
+    template = _template_summary(payload, script)
+    error_code, retryable = _error_metadata(row.status, row.stage, row.error_message)
+    quote = payload.get("quote") if isinstance(payload.get("quote"), dict) else {}
+    quote_total = quote.get("total") if isinstance(quote.get("total"), dict) else {}
+    product_id = _first_string(product, "product_id", "id", "uuid")
+    product_name = _first_string(product, "product_name", "name", "title") or "이름 없는 상품"
+    thumbnail_url = getattr(row, "image_url", None) or _first_string(
+        product, "image_url", "thumbnail_url"
+    )
+    package_text_verified = bool(
+        product.get("package_text_verified")
+        or product.get("verified_package_claims")
+        or (
+            isinstance(product.get("asset_fidelity"), dict)
+            and product["asset_fidelity"].get("package_text_verified")
+        )
+    )
+    primary_candidate = None
+    if primary is not None:
+        validation = primary.get("validation") if isinstance(primary.get("validation"), dict) else {}
+        candidate_id = str(primary.get("candidate_id"))
+        primary_candidate = {
+            "candidate_id": candidate_id,
+            "video_url": f"/api/v1/reels/generate/{row.job_id}/candidates/{candidate_id}/file",
+            "download_url": (
+                f"/api/v1/reels/generate/{row.job_id}/candidates/"
+                f"{candidate_id}/file?download=true"
             ),
-            "completed_candidates": completed_candidates,
-            "failed_candidates": failed_candidates,
-            "candidates": candidates,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
-            "elapsed_seconds": _elapsed_seconds(row.created_at, row.updated_at, row.status),
-            "message": _status_message(row.status, row.stage, row.input_type),
+            "duration_seconds": validation.get("duration_seconds"),
+            "technical_score": validation.get("technical_score"),
         }
-        response.update(_visual_provenance(row.payload_json))
-        return response
+    return {
+        "job_id": row.job_id,
+        "product": {
+            "id": product_id,
+            "name": product_name,
+            "thumbnail_url": thumbnail_url,
+        },
+        "status": row.status,
+        "stage": row.stage,
+        "template": template,
+        "duration_seconds": template.get("duration_seconds") if template else _script_duration(script),
+        "visual_mode": _visual_provenance(row.payload_json).get("visual_mode", "product_only"),
+        "candidates": {
+            "total": row.candidate_count if row.candidate_count is not None else len(candidates),
+            "completed": len(completed),
+            "failed": len(failed),
+        },
+        "cost": {
+            "currency": quote.get("currency", "USD"),
+            "estimated_min": quote_total.get("min"),
+            "estimated_expected": quote_total.get("expected"),
+            "estimated_max": quote_total.get("max"),
+            "actual": row.cost,
+            "coverage": quote.get("coverage", "video_only"),
+        },
+        "primary_candidate": primary_candidate,
+        "error": (
+            {
+                "code": error_code,
+                "message": row.error_message,
+                "retryable": retryable,
+            }
+            if row.error_message
+            else None
+        ),
+        "asset_fidelity": {
+            "package_text_verified": package_text_verified,
+            "warning": (
+                None
+                if package_text_verified
+                else "패키지 수량과 작은 글자는 원본 packshot으로 최종 확인해야 합니다."
+            ),
+        },
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _json_dict(raw: str | None) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _json_list(raw: str | None) -> list[dict[str, Any]]:
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _first_string(source: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = source.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _script_duration(script: dict[str, Any] | None) -> float | None:
+    try:
+        value = script["scenes"][-1]["time_range_sec"]["end"] if script else None
+        return float(value) if isinstance(value, (int, float)) else None
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _template_summary(
+    payload: dict[str, Any], script: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    template = payload.get("template")
+    if isinstance(template, dict) and isinstance(template.get("id"), str):
+        return {
+            "id": template["id"],
+            "version": template.get("version"),
+            "duration_seconds": template.get("duration_seconds") or _script_duration(script),
+        }
+    template_id = payload.get("template_id")
+    if isinstance(template_id, str) and template_id:
+        return {
+            "id": template_id,
+            "version": payload.get("template_version"),
+            "duration_seconds": payload.get("max_duration_seconds") or _script_duration(script),
+        }
+    return None
+
+
+def _workflow_provenance(payload_json: str | None) -> dict[str, Any]:
+    payload = _json_dict(payload_json) or {}
+    template = _template_summary(payload, None)
+    quote = payload.get("quote") if isinstance(payload.get("quote"), dict) else None
+    result: dict[str, Any] = {}
+    if template is not None:
+        result["template"] = template
+    if quote is not None:
+        result["quote"] = {
+            "quote_id": quote.get("quote_id"),
+            "currency": quote.get("currency"),
+            "total": quote.get("total"),
+            "coverage": quote.get("coverage"),
+            "expires_at": quote.get("expires_at"),
+        }
+    return result
+
+
+def _encode_cursor(created_at: datetime, job_id: str) -> str:
+    raw = json.dumps(
+        {"created_at": created_at.isoformat(), "job_id": job_id},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, str]:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+        created_at = datetime.fromisoformat(payload["created_at"])
+        job_id = payload["job_id"]
+        if not isinstance(job_id, str) or not job_id:
+            raise ValueError
+    except (
+        ValueError,
+        TypeError,
+        KeyError,
+        UnicodeDecodeError,
+        binascii.Error,
+    ) as error:
+        raise ValueError("목록 cursor가 올바르지 않습니다.") from error
+    return created_at, job_id
 
 
 def get_job_payload(job_id: str) -> dict[str, Any] | None:

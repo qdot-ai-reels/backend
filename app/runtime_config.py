@@ -86,6 +86,34 @@ def resolve_script_generation_duration(
     return duration, capabilities.supported_durations
 
 
+def resolve_exact_script_generation_duration(
+    duration_seconds: int,
+    service: SettingsService | None = None,
+) -> tuple[int, tuple[int, ...] | None]:
+    """Require a template's exact duration instead of silently downgrading it."""
+    api_key = (
+        os.getenv("OPENROUTER_VIDEO_API_KEY")
+        or os.getenv("OPENROUTER_API_KEY")
+        or app_settings.OPENROUTER_API_KEY
+        or ""
+    )
+    if service is not None:
+        api_key = service.get_video_api_key() or api_key
+
+    # Preserve local/unit-test script generation without a funded video provider.
+    if not api_key:
+        return duration_seconds, None
+
+    capabilities = get_video_model_capabilities(service)
+    if duration_seconds not in capabilities.supported_durations:
+        supported = ", ".join(str(value) for value in capabilities.supported_durations)
+        raise ValueError(
+            f"선택한 영상 모델은 {duration_seconds}초 템플릿을 지원하지 않습니다. "
+            f"지원 길이: {supported}초"
+        )
+    return duration_seconds, capabilities.supported_durations
+
+
 def build_video_client(
     service: SettingsService | None = None,
     capabilities: VideoModelCapabilities | None = None,

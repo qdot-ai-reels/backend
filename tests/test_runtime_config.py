@@ -2,7 +2,10 @@ import os
 import unittest
 from unittest.mock import patch
 
-from app.runtime_config import resolve_script_generation_duration
+from app.runtime_config import (
+    resolve_exact_script_generation_duration,
+    resolve_script_generation_duration,
+)
 from app.script_generator import OpenRouterClient
 from app.settings_service import VideoModelCapabilities
 from app.tts_generator import (
@@ -71,6 +74,21 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(duration, 15)
         self.assertIsNone(supported)
         get_capabilities.assert_not_called()
+
+    @patch("app.runtime_config.get_video_model_capabilities")
+    def test_template_duration_is_never_silently_downgraded(self, get_capabilities):
+        get_capabilities.return_value = VideoModelCapabilities(
+            model_id="google/veo",
+            name="Veo",
+            supported_durations=(4, 8),
+            supported_aspect_ratios=("9:16",),
+            supported_resolutions=("1080p",),
+            generate_audio=False,
+        )
+
+        with patch.dict(os.environ, {"OPENROUTER_VIDEO_API_KEY": "video-key"}):
+            with self.assertRaisesRegex(ValueError, "15초 템플릿"):
+                resolve_exact_script_generation_duration(15)
 
 
 if __name__ == "__main__":

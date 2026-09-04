@@ -259,6 +259,10 @@ CORS_ORIGINS=https://reels.example.com
 
 ## Worker 경계
 
+Studio의 4/6/8/15초 템플릿, 생성 전 견적, 관리 목록, one-click 생성과
+멱등성 계약은 [`docs/studio-workflow-contract.md`](docs/studio-workflow-contract.md)에
+정리되어 있습니다.
+
 현재 기본 dispatcher는 단일 호스트용 FastAPI `BackgroundTasks` adapter입니다.
 요청 payload와 후보 상태는 DB에 저장되며 worker 함수가 HTTP 계층과 분리되어
 있습니다. 다중 인스턴스 운영 전에는 이 adapter를 Celery/RQ/SQS 같은 durable

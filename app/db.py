@@ -4,7 +4,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, Integer, String, Text, create_engine, inspect, select, text
+from sqlalchemy import (
+    DateTime,
+    Float,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    create_engine,
+    inspect,
+    select,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.settings_service import GlobalSettings, SettingsRepository
@@ -58,6 +69,10 @@ class GenerationJobRow(Base):
     output_path: Mapped[str | None] = mapped_column(String(2048))
     error_message: Mapped[str | None] = mapped_column(Text)
     cost: Mapped[float | None] = mapped_column(Float)
+    client_request_id: Mapped[str | None] = mapped_column(
+        String(128), unique=True, index=True
+    )
+    request_hash: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -66,6 +81,34 @@ class GenerationJobRow(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+
+class GenerationQuoteRow(Base):
+    """Immutable pricing snapshot accepted by a later generation request."""
+
+    __tablename__ = "generation_quotes"
+
+    quote_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    request_hash: Mapped[str] = mapped_column(String(64), index=True)
+    template_id: Mapped[str] = mapped_column(String(64))
+    template_version: Mapped[int] = mapped_column(Integer)
+    duration_seconds: Mapped[int] = mapped_column(Integer)
+    candidate_count: Mapped[int] = mapped_column(Integer)
+    visual_mode: Mapped[str] = mapped_column(String(32))
+    resolution: Mapped[str] = mapped_column(String(32))
+    model_id: Mapped[str] = mapped_column(String(255))
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    rate_per_second_usd: Mapped[float] = mapped_column(Numeric(14, 8))
+    minimum_cost_usd: Mapped[float] = mapped_column(Numeric(14, 8))
+    expected_cost_usd: Mapped[float] = mapped_column(Numeric(14, 8))
+    maximum_cost_usd: Mapped[float] = mapped_column(Numeric(14, 8))
+    rate_source: Mapped[str] = mapped_column(String(64), default="configured_rate_card")
+    coverage: Mapped[str] = mapped_column(String(32), default="video_only")
+    disclaimer: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 def get_engine():
@@ -120,6 +163,21 @@ def init_db() -> None:
             connection.execute(
                 text("ALTER TABLE generation_jobs ADD COLUMN candidates_json TEXT")
             )
+        if "client_request_id" not in generation_job_columns:
+            connection.execute(
+                text("ALTER TABLE generation_jobs ADD COLUMN client_request_id VARCHAR(128)")
+            )
+        if "request_hash" not in generation_job_columns:
+            connection.execute(
+                text("ALTER TABLE generation_jobs ADD COLUMN request_hash VARCHAR(64)")
+            )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "ix_generation_jobs_client_request_id "
+                "ON generation_jobs (client_request_id)"
+            )
+        )
         if "openrouter_api_key_encrypted" in columns and "openrouter_script_api_key_encrypted" not in columns:
             connection.execute(
                 text(

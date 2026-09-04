@@ -9,6 +9,7 @@ venv/
 
 # Environment
 .env
+/quedot.local.db
 
 # IDE
 .vscode/
