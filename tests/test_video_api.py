@@ -19,7 +19,7 @@ from app.video_validation_pipeline import PipelineResult, PipelineStatus
 
 
 class VideoApiTests(unittest.TestCase):
-    def test_uses_480p_when_runtime_settings_are_unavailable(self):
+    def test_uses_720p_when_runtime_settings_are_unavailable(self):
         capabilities = VideoModelCapabilities(
             model_id="video-model",
             name="Video Model",
@@ -29,7 +29,7 @@ class VideoApiTests(unittest.TestCase):
             generate_audio=False,
         )
 
-        self.assertEqual(select_video_resolution(None, capabilities), "480p")
+        self.assertEqual(select_video_resolution(None, capabilities), "720p")
 
     def test_only_accepts_vertical_nine_by_sixteen_requests(self):
         with self.assertRaises(ValidationError):
