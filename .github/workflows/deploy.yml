@@ -17,7 +17,9 @@ jobs:
           username: ${{ secrets.PROD_USER }}
           key: ${{ secrets.PROD_SSH_KEY }}
           script: |
-            cd ${{ secrets.PROD_APP_DIR }}
+            set -e
+
+            cd "${{ secrets.PROD_APP_DIR }}"
 
             git fetch origin main
 
@@ -31,4 +33,15 @@ jobs:
 
             docker compose up -d --build
 
-            curl --fail http://localhost:8000/health
+            for i in {1..12}; do
+              if curl --fail --silent --show-error http://127.0.0.1:8000/health; then
+                echo "Health check passed"
+                exit 0
+              fi
+
+              echo "Health check failed. Retrying in 5 seconds..."
+              sleep 5
+            done
+
+            docker compose logs --tail=100 web
+            exit 1
