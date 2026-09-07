@@ -13,6 +13,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    env:
+      AWS_ACCESS_KEY_ID: test-access-key
+      AWS_SECRET_ACCESS_KEY: test-secret-key
+      S3_BUCKET_NAME: test-bucket
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
