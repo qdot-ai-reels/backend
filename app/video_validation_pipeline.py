@@ -16,7 +16,11 @@ from app.video_generator import (
     VideoGenerationResult,
     VideoGenerationTimeoutError,
 )
-from app.video_metadata import pad_video_to_vertical_canvas, read_video_metadata
+from app.video_metadata import (
+    pad_video_to_vertical_canvas,
+    read_video_metadata,
+    vertical_canvas_dimensions,
+)
 from app.video_validator import ValidationPolicy, ValidationResult, validate_video
 
 
@@ -188,9 +192,7 @@ class VideoValidationPipeline:
     ) -> str:
         expected_aspect = policy.expected_aspect_width / policy.expected_aspect_height
         actual_aspect = metadata.width / metadata.height
-        target_height = round(metadata.width / expected_aspect)
-        if target_height % 2:
-            target_height += 1
+        _, target_height = vertical_canvas_dimensions(metadata.width, metadata.height)
 
         should_pad = (
             metadata.height < target_height

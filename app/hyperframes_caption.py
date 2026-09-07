@@ -53,6 +53,14 @@ def build_composition_html(
     if duration_seconds is not None and duration_seconds <= 0:
         raise ValueError("HyperFrames composition의 영상 길이는 양수여야 합니다.")
 
+    horizontal_margin = max(1, round(width * 0.06))
+    caption_bottom = max(1, round(height * 0.13))
+    caption_font_size = max(1, round(width * 0.052))
+    caption_padding_vertical = max(1, round(height * 0.0125))
+    caption_padding_horizontal = max(1, round(width * 0.03))
+    caption_radius = max(1, round(width * 0.0167))
+    caption_offset = max(1, round(height * 0.0156))
+
     cues: list[str] = []
     animations: list[str] = []
     duration = float(duration_seconds or 0)
@@ -69,7 +77,7 @@ def build_composition_html(
             f'''      <div id="caption-{index}" class="caption clip" data-start="{float(start)}" data-duration="{float(end - start)}" data-track-index="5">{escape(text)}</div>'''
         )
         animations.append(
-            f'''      window.__timelines["main"].fromTo("#caption-{index}", {{ opacity: 0, y: 28, scale: 0.97 }}, {{ opacity: 1, y: 0, scale: 1, duration: 0.18, ease: "power2.out" }}, {float(start)});'''
+            f'''      window.__timelines["main"].fromTo("#caption-{index}", {{ opacity: 0, y: {caption_offset}, scale: 0.97 }}, {{ opacity: 1, y: 0, scale: 1, duration: 0.18, ease: "power2.out" }}, {float(start)});'''
         )
 
     if duration <= 0:
@@ -87,14 +95,17 @@ def build_composition_html(
       html, body {{ margin: 0; width: {width}px; height: {height}px; overflow: hidden; background: #000; }}
       .caption {{
         position: absolute;
-        left: 80px;
-        right: 80px;
-        bottom: 260px;
-        padding: 24px 32px;
+        left: {horizontal_margin}px;
+        right: {horizontal_margin}px;
+        bottom: {caption_bottom}px;
+        padding: {caption_padding_vertical}px {caption_padding_horizontal}px;
         color: #fff;
         background: rgba(0, 0, 0, 0.62);
-        border-radius: 18px;
-        font: 700 56px/1.2 Inter, sans-serif;
+        border-radius: {caption_radius}px;
+        font-family: Inter, sans-serif;
+        font-size: {caption_font_size}px;
+        font-weight: 700;
+        line-height: 1.2;
         text-align: center;
       }}
     </style>

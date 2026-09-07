@@ -5,6 +5,17 @@ from pathlib import Path
 from app.video_validator import VideoMetadata
 
 
+def vertical_canvas_dimensions(width: int, height: int) -> tuple[int, int]:
+    """Return an even-dimensioned 9:16 canvas for a generated video."""
+    if width < 1 or height < 1:
+        raise ValueError("Video dimensions must be positive")
+
+    target_height = round(width * 16 / 9)
+    if target_height % 2:
+        target_height += 1
+    return width, target_height
+
+
 def parse_ffprobe_output(output: str) -> VideoMetadata:
     payload = json.loads(output)
     video_stream = next(
@@ -58,9 +69,7 @@ def pad_video_to_vertical_canvas(
     metadata: VideoMetadata,
 ) -> None:
     """Add black top/bottom padding without stretching the generated video."""
-    target_height = round(metadata.width * 16 / 9)
-    if target_height % 2:
-        target_height += 1
+    target_width, target_height = vertical_canvas_dimensions(metadata.width, metadata.height)
 
     subprocess.run(
         [
@@ -74,7 +83,7 @@ def pad_video_to_vertical_canvas(
             (
                 f"scale={metadata.width}:{target_height}:"
                 "force_original_aspect_ratio=decrease,"
-                f"pad={metadata.width}:{target_height}:(ow-iw)/2:(oh-ih)/2:black"
+                f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2:black"
             ),
             "-c:v",
             "libx264",

@@ -181,6 +181,19 @@ class HyperFramesCaptionTests(unittest.TestCase):
         self.assertIn('data-duration="8.0"', html)
         self.assertNotIn('class="caption clip"', html)
 
+    def test_build_composition_html_scales_caption_layout_to_canvas(self) -> None:
+        html = build_composition_html(
+            video_filename="combined.mp4",
+            transcript=[{"id": "w0", "text": "캡션", "start": 0.0, "end": 3.0}],
+            width=720,
+            height=1280,
+        )
+
+        self.assertIn("left: 43px", html)
+        self.assertIn("right: 43px", html)
+        self.assertIn("bottom: 166px", html)
+        self.assertIn("font-size: 37px", html)
+
 
 if __name__ == "__main__":
     unittest.main()
