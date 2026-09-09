@@ -282,6 +282,7 @@ class ScriptGenerationRequest:
     target_audience: str = "육아에 관심 있는 보호자"
     supported_video_durations: tuple[int, ...] | None = None
     retry_instruction: str | None = None
+    use_default_prompt: bool = True
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_duration_seconds <= MAX_SCRIPT_DURATION_SECONDS:
@@ -365,6 +366,23 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
     product_prompt_fields = build_product_prompt_fields(request.product, request.reviews)
     custom_prompt = request.custom_prompt.strip() if request.custom_prompt else ""
     cta_action = extract_cta_action(custom_prompt)
+    if not request.use_default_prompt:
+        return f"""
+당신은 공동구매 광고 숏폼 스크립트 작성자입니다.
+
+### 사용자 지정 프롬프트
+{custom_prompt}
+
+### 요구사항
+- CTA Action: {cta_action}
+- Video duration: {request.max_duration_seconds}
+- Upload Channel: {request.channel}
+- 상품 정보에 없는 사실이나 과장 표현을 만들지 마세요.
+- 출력은 기존 Structured Output JSON 형식을 따르고 하나 이상의 scenes를 포함하세요.
+
+### 상품 정보
+{product_prompt_fields}
+"""
     return f"""
 당신은 공동구매 광고 숏폼 스크립트 작성자입니다.
 
