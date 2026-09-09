@@ -34,6 +34,7 @@ class ScriptGenerationBody(BaseModel):
     max_duration_seconds: int | None = Field(default=None, ge=1, le=30)
     channel: str = "Instagram Reels"
     target_audience: str = "육아에 관심 있는 보호자"
+    use_default_prompt: bool = True
 
 
 def validate_product_image_inputs(product: dict[str, Any], image_url: str | None) -> None:
@@ -133,6 +134,7 @@ def run_script_job(job_id: str, payload: dict[str, Any]) -> None:
             image_url=payload.get("image_url"),
             reviews=payload.get("reviews") or [],
             custom_prompt=payload.get("prompt"),
+            use_default_prompt=payload.get("use_default_prompt", True),
             max_duration_seconds=max_duration_seconds,
             channel=payload.get("channel", "Instagram Reels"),
             target_audience=payload.get("target_audience", "육아에 관심 있는 보호자"),
