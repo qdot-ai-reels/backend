@@ -71,6 +71,8 @@ class FinalGenerationBody(BaseModel):
     max_duration_seconds: int | None = Field(default=None, ge=1, le=30)
     channel: str = "Instagram Reels"
     target_audience: str = "육아에 관심 있는 보호자"
+    allow_script_regeneration: bool = True
+    use_default_prompt: bool = True
 
 
 def validate_product_image_inputs(
@@ -169,6 +171,8 @@ def run_generation_job(job_id: str, payload: dict[str, Any]) -> None:
             _extract_detail_image_urls(payload.get("product")),
             service,
             job_id=job_id,
+            custom_prompt=payload.get("prompt"),
+            use_default_prompt=payload.get("use_default_prompt", True),
         )
         if not video_result.storage_path:
             logger.error(
@@ -237,12 +241,15 @@ def _generate_narration_with_script_regeneration(
         inferred_duration = _script_duration_seconds(current_script)
         if inferred_duration is not None:
             regeneration_payload["max_duration_seconds"] = inferred_duration
+    allow_script_regeneration = bool(payload.get("allow_script_regeneration", True))
     for regeneration in range(MAX_SCRIPT_REGENERATIONS + 1):
         if set_stage is not None:
             set_stage("TTS_GENERATION")
         try:
             return current_script, tts_client.generate_narration(current_script)
         except SceneAudioDurationError as error:
+            if not allow_script_regeneration:
+                raise
             if regeneration >= MAX_SCRIPT_REGENERATIONS:
                 raise
             if set_stage is not None:
@@ -281,6 +288,7 @@ def _generate_script(
         image_url=payload.get("image_url") or _extract_image_url(raw),
         reviews=payload.get("reviews") or raw.get("reviews", []),
         custom_prompt=custom_prompt,
+        use_default_prompt=payload.get("use_default_prompt", True),
         max_duration_seconds=max_duration_seconds,
         channel=payload.get("channel", "Instagram Reels"),
         target_audience=payload.get("target_audience", "육아에 관심 있는 보호자"),
@@ -297,6 +305,8 @@ def _generate_video(
     detail_image_urls: tuple[str, ...],
     service: SettingsService | None,
     job_id: str | None = None,
+    custom_prompt: str | None = None,
+    use_default_prompt: bool = True,
 ):
     capabilities = get_video_model_capabilities(service)
     client = build_video_client(
@@ -319,6 +329,8 @@ def _generate_video(
         generate_audio=False,
         influencer_image_url=influencer_image_url,
         detail_image_urls=detail_image_urls,
+        custom_prompt=custom_prompt,
+        use_default_prompt=use_default_prompt,
     )
     retries = service.get_runtime_settings().video_generation_retries if service else 2
     return VideoValidationPipeline(generate_video=lambda pipeline_request, _attempt: client.generate_video(pipeline_request), publish_video=publish_validated_video, max_retries=retries).run(request)

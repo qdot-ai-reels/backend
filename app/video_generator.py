@@ -101,6 +101,8 @@ class VideoGenerationRequest:
     generate_audio: bool = False
     influencer_image_url: str | None = None
     detail_image_urls: tuple[str, ...] = ()
+    custom_prompt: str | None = None
+    use_default_prompt: bool = True
 
 
 @dataclass(frozen=True)
@@ -114,10 +116,19 @@ class VideoGenerationResult:
 def build_video_prompt(
     script: Mapping[str, Any],
     has_influencer_image: bool = False,
+    custom_prompt: str | None = None,
+    use_default_prompt: bool = True,
 ) -> str:
     """Convert a validated script document using the Colab prompt verbatim."""
     visibility_prompt = INFLUENCER_VISIBILITY_PROMPT if has_influencer_image else ""
-    return convert_dict_to_formatted_text(script) + "\n\n" + VIDEO_CONDITION_PROMPT + visibility_prompt
+    prompt = convert_dict_to_formatted_text(script)
+    if use_default_prompt:
+        prompt += "\n\n" + VIDEO_CONDITION_PROMPT + visibility_prompt
+    elif custom_prompt and custom_prompt.strip():
+        prompt += "\n\n### User video instructions\n" + custom_prompt.strip()
+    else:
+        raise ValueError("영상 프롬프트가 비어 있습니다.")
+    return prompt
 
 
 def convert_dict_to_formatted_text(data: Mapping[str, Any] | str) -> str:
@@ -241,6 +252,8 @@ class OpenRouterVideoClient:
             "prompt": build_video_prompt(
                 request.script,
                 has_influencer_image=bool(request.influencer_image_url),
+                custom_prompt=request.custom_prompt,
+                use_default_prompt=request.use_default_prompt,
             ),
             "duration": duration_seconds,
             "resolution": request.resolution,

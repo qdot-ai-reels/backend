@@ -178,6 +178,26 @@ class FinalGenerationApiTests(unittest.TestCase):
 
     @patch("app.api.v1.final_generation._generate_script")
     @patch("app.api.v1.final_generation.OpenRouterTTSClient")
+    def test_preserves_edited_script_when_regeneration_is_disabled(
+        self, tts_client_class, generate_script
+    ):
+        duration_error = SceneAudioDurationError(1, 1.5, 2.1)
+        tts_client_class.return_value.generate_narration.side_effect = duration_error
+
+        with self.assertRaises(SceneAudioDurationError):
+            _generate_narration_with_script_regeneration(
+                payload={
+                    "product": {"name": "상품"},
+                    "allow_script_regeneration": False,
+                },
+                script={"scenes": [{"time_range_sec": {"start": 0, "end": 1.5}}]},
+                service=None,
+            )
+
+        generate_script.assert_not_called()
+
+    @patch("app.api.v1.final_generation._generate_script")
+    @patch("app.api.v1.final_generation.OpenRouterTTSClient")
     def test_script_regeneration_preserves_initial_duration_when_payload_omits_it(
         self, tts_client_class, generate_script
     ):
