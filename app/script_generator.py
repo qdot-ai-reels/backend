@@ -378,6 +378,8 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 {product_prompt_fields}
 {f"\n\n{request.retry_instruction.strip()}" if request.retry_instruction and request.retry_instruction.strip() else ""}
 """
+
+
     return f"""
 당신은 공동구매 광고 숏폼 스크립트 작성자입니다.
 
@@ -564,6 +566,27 @@ b. Physical Risk Priority: 다음 위험은 장면 선택 단계에서 우선적
 {product_prompt_fields}
 {f"\n\n{request.retry_instruction.strip()}" if request.retry_instruction and request.retry_instruction.strip() else ""}
 """
+
+
+def get_default_script_prompt_preview() -> str:
+    """Return the canonical default prompt with runtime values represented as placeholders."""
+    return build_script_prompt(
+        ScriptGenerationRequest(
+            product={
+                "selling_point": "{{selling_point}}",
+                "usp": "{{usp}}",
+                "curator_pitch": "{{curator_pitch}}",
+                "hashtags": "{{hashtags}}",
+                "description_text": "{{description_text}}",
+                "detail_info": "{{detail_info}}",
+            },
+            reviews=["{{reviews}}"],
+            custom_prompt="CTA: {{cta_action}}",
+            max_duration_seconds=15,
+            channel="{{channel}}",
+            target_audience="{{target_audience}}",
+        )
+    ).strip()
 
 def build_script_message_content(
     request: ScriptGenerationRequest,
