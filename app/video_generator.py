@@ -32,40 +32,45 @@ DEFAULT_SUPPORTED_DURATIONS = tuple(range(4, 16))
 logger = logging.getLogger(__name__)
 
 
-# Keep this block identical to the Colab video-generation condition prompt.
+# Keep this block identical to the latest Colab video-generation condition prompt.
 VIDEO_CONDITION_PROMPT = """
-### Condition
+# Requirements
+
 1. Video Rules
-- No dialogue or direct-to-camera speech.
-- Keep the same person's appearance and clothing consistent across shots.
-- Preserve the provided product's shape, color, package structure, and label placement.
+- [IMPORTANT] Actively apply the “Filming/Editing Techniques” specified in the table.
+- Dialogue and lines delivered while directly looking at the camera are prohibited.
+- Maintain consistent character appearance and clothing throughout all scenes.
+- Preserve the provided product's shape, color, structure, and identity.
 
-2. reference (person) image
-- Use the provided person image as the character reference. The person in the image was generated using AI.
-- Front-facing appearance is not required.
+2. Reference (Character) Image
+- Use the provided character image as the character reference. The person in the image was generated using AI.
+- A frontal view is not required.
 
-3. Anti-Slop Prompt For Video
-Camera
-- slight handheld motion
+3. Physical Continuity
+- Follow realistic physical laws and temporal continuity.
+- Generate only the physical movements explicitly specified in the scene instructions.
+- Every generated movement must have a plausible physical cause and effect.
+- Unless changed through a visible action or transition, maintain the object's identity, size, shape, material, position, contact, and state.
+- Do not generate teleportation, floating, interpenetration, merging, duplication, disappearance, or unexplained transformations.
+- Hands, bodies, liquids, collisions, and falling objects must move naturally according to gravity and physical forces.
 
-People
-- imperfect skin texture
-- subtle blemishes
-- subtle clothing wrinkles
-- natural and subtle asymmetry
+4. Anti-Slop Prompt for Video
+- Characters
+  - Imperfect skin texture
+  - Subtle blemishes
+  - Fine clothing wrinkles
+  - Natural, subtle asymmetry
 
-4. Text & Label Policy
-- No added subtitles, captions, price, discount, or CTA text.
-- Do not intentionally show product text in a readable close-up.
-- Preserve the original product label and graphics.
+5. Text and Label Policy
+- Do not add subtitles, captions, prices, discounts, or CTA text.
+- Do not intentionally show product text in close-ups where it is clearly readable.
+- Preserve the original product labels and graphics.
 - Do not generate or modify package text or logos.
+
+6. Other
+- Objects must maintain the same identity, appearance, size, and material throughout the entire scene.
+- Objects held by a person must not suddenly change, disappear, duplicate, or be replaced.
 """
-
-INFLUENCER_VISIBILITY_PROMPT = (
-    "\n\nThe AI influencer must be clearly visible on screen. "
-    "Do not replace the influencer with only a hand, finger, or an off-screen action."
-)
-
 
 class VideoGenerationError(RuntimeError):
     """Raised when a video generation job cannot be completed."""
@@ -120,10 +125,9 @@ def build_video_prompt(
     use_default_prompt: bool = True,
 ) -> str:
     """Convert a validated script document using the Colab prompt verbatim."""
-    visibility_prompt = INFLUENCER_VISIBILITY_PROMPT if has_influencer_image else ""
     prompt = convert_dict_to_formatted_text(script)
     if use_default_prompt:
-        prompt += "\n\n" + VIDEO_CONDITION_PROMPT + visibility_prompt
+        prompt += "\n\n" + VIDEO_CONDITION_PROMPT
     elif custom_prompt and custom_prompt.strip():
         prompt += "\n\n### User video instructions\n" + custom_prompt.strip()
     else:
@@ -142,8 +146,8 @@ def convert_dict_to_formatted_text(data: Mapping[str, Any] | str) -> str:
         return ""
 
     rows = [
-        "| Section | Time Range | Visual |",
-        "| --- | --- | --- |",
+        "| Section | Time Range | Visual | Exclusion List About Physical Motions |",
+        "| --- | --- | --- | --- |",
     ]
     for index, scene in enumerate(scenes, start=1):
         if not isinstance(scene, Mapping):
@@ -154,7 +158,9 @@ def convert_dict_to_formatted_text(data: Mapping[str, Any] | str) -> str:
         start = time_range.get("start", 0)
         end = time_range.get("end", 0)
         visual = str(scene.get("visual", "")).replace("|", "\\|").replace("\n", " ")
-        rows.append(f"| {index} | {start}s - {end}s | {visual} |")
+        exclusion = str(scene.get("exclusion_list_about_physical_motions", ""))
+        exclusion = exclusion.replace("|", "\\|").replace("\n", " ")
+        rows.append(f"| {index} | {start}s - {end}s | {visual} | {exclusion} |")
     return "\n".join(rows)
 
 
