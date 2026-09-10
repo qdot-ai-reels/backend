@@ -51,9 +51,7 @@ VALID_DOCUMENT = {
         "main_target": "아기 식기를 사용하는 보호자",
     },
     "video": {
-        "video_duration": "3",
-        "required_scenes_elements": None,
-        "forbidden_scenes_elements": None,
+        "video_duration": 3,
     },
     "scenes": [
         {
@@ -65,6 +63,7 @@ VALID_DOCUMENT = {
                 "voiceover": "성분 확인하세요.",
             },
             "intent": "제품을 먼저 보여준다.",
+            "exclusion_list_about_physical_motions": "순간이동, 복제, 관통",
             "notes": "제품을 먼저 보여준다.",
         }
     ],
@@ -321,7 +320,7 @@ class ScriptGeneratorTests(unittest.TestCase):
         with self.assertRaises(OpenRouterConfigurationError):
             client.generate_script(ScriptGenerationRequest(product=PRODUCT))
 
-    def test_uses_free_default_model_when_script_model_environment_variable_is_blank(self):
+    def test_uses_colab_script_model_when_script_model_environment_variable_is_blank(self):
         with patch.dict(
             os.environ,
             {"OPENROUTER_SCRIPT_MODEL": "", "OPENROUTER_FALLBACK_MODEL": ""},
@@ -329,7 +328,7 @@ class ScriptGeneratorTests(unittest.TestCase):
         ):
             client = OpenRouterClient.from_env()
 
-        self.assertEqual(client.model, "openai/gpt-oss-20b:free")
+        self.assertEqual(client.model, "google/gemini-3.8-flash")
         self.assertEqual(client.fallback_model, client.model)
 
     def test_defaults_fallback_model_to_configured_script_model(self):
@@ -393,11 +392,7 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertNotIn("summary", body["response_format"]["json_schema"]["schema"]["required"])
         self.assertIn("Selling Point", body["messages"][0]["content"])
         self.assertIn("EWG 그린등급", body["messages"][0]["content"])
-        self.assertIn("4.5음절", body["messages"][0]["content"])
-        self.assertIn("각 장면의 대사 음절 수가 해당 장면 시간 × 4.5를 넘지 않도록 작성하세요.", body["messages"][0]["content"])
-        self.assertIn("대사는 장면 시간 안에 읽을 수 있도록 짧게 작성하세요.", body["messages"][0]["content"])
-        self.assertIn("각 장면의 허용 음절 수는 장면 시간(초) × 4.5를 계산한 뒤 소수점 이하는 버린다.", body["messages"][0]["content"])
-        self.assertIn("허용 음절 수를 단 1개라도 초과하는 voiceover는 작성하지 않는다.", body["messages"][0]["content"])
+        self.assertIn("3.5음절", body["messages"][0]["content"])
 
     def test_prompt_matches_colab_and_keeps_schema_out_of_prompt(self):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
@@ -538,34 +533,24 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("유저가 프롬프트를 통해 해당 상품정보를 입력해주었다면", prompt)
         self.assertIn("Hook-Body-CTA", prompt)
         self.assertIn("PAS", prompt)
-        self.assertIn("Anti-Slop Prompt For Video", prompt)
+        self.assertIn("Physical-Safe Scene Selection", prompt)
 
     def test_includes_all_script_prompt_260830_1_video_direction_rules(self):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
 
         self.assertIn("dolly", prompt)
         self.assertIn("Reduce fill", prompt)
-        self.assertIn(
-            "Anti-Slop Prompt For Video: 현실성 있는 영상을 위해 불완전성(imperfection)을 더하라",
-            prompt,
-        )
+        self.assertIn("Visual Realism", prompt)
         self.assertIn("카메라를 주시하며 말하지 않는다", prompt)
-        self.assertIn("같은 인물의 얼굴, 헤어스타일, 의상이 장면마다 유지", prompt)
-        self.assertIn("상품 라벨의 글자와 로고는 식별 가능한 정면 클로즈업으로 보여주지 않는다", prompt)
-        self.assertIn(
-            "영상 생성 모델이 만드는 영상 프레임 안에는 자막, 가격, 할인율, CTA 문구를 직접 삽입하지 않는다",
-            prompt,
-        )
+        self.assertIn("동일 인물의 얼굴, 헤어스타일, 의상을 장면마다 유지", prompt)
+        self.assertIn("상품 라벨은 식별 가능한 정면 클로즈업을 피한다", prompt)
+        self.assertIn("상품에 실제 표기된 텍스트 외의 텍스트를 추가하지 않는다", prompt)
 
     def test_separates_model_baked_text_from_hyperframes_captions(self):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
 
-        self.assertIn("영상 생성 모델이 만드는 영상 프레임 안에는", prompt)
-        self.assertIn("HyperFrames가 별도로 추가하는 텍스트 애니메이션용 캡션", prompt)
-        self.assertIn(
-            "subtitle`을 `null`이나 빈 문자열로 반환하지 않는다",
-            prompt,
-        )
+        self.assertNotIn("HyperFrames가 별도로 추가하는 텍스트 애니메이션용 캡션", prompt)
+        self.assertNotIn("subtitle`을 `null`이나 빈 문자열로 반환하지 않는다", prompt)
 
     def test_includes_all_260830_1_content_rules(self):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
@@ -573,14 +558,13 @@ class ScriptGeneratorTests(unittest.TestCase):
         expected_rules = (
             "첫 1~3초 안에",
             "어떤 상황에서 왜 좋은지",
-            "소비자가 판단할 수 있는 정보",
+            "소비자가 판단할 수 있는 시각적으로 정보",
             "지나치게 과장하지 말아야",
             "허위 경험",
-            "slight handheld motion",
-            "imperfect skin texture",
-            "subtle blemishes",
-            "wrinkled fabric",
-            "natural and subtle asymmetry",
+            "자연스러운 피부결",
+            "미세한 잡티",
+            "옷 주름",
+            "비대칭",
         )
         for rule in expected_rules:
             self.assertIn(rule, prompt)
@@ -588,11 +572,11 @@ class ScriptGeneratorTests(unittest.TestCase):
     def test_enforces_documented_visual_length_in_response_schema(self):
         visual_schema = SCRIPT_RESPONSE_SCHEMA["properties"]["scenes"]["items"]["properties"]["visual"]
 
-        self.assertEqual(visual_schema["maxLength"], 99)
+        self.assertNotIn("maxLength", visual_schema)
 
     def test_rejects_visual_that_reaches_100_characters(self):
         document = json.loads(json.dumps(VALID_DOCUMENT))
-        document["scenes"][0]["visual"] = "가" * 100
+        document["scenes"][0]["visual"] = "가" * 301
 
         with self.assertRaisesRegex(ScriptValidationError, "visual"):
             validate_script_document(document)

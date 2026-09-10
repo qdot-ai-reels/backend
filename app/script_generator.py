@@ -1,5 +1,4 @@
 """Generate structured short-form scripts through the OpenRouter chat API."""
-
 from __future__ import annotations
 
 import json
@@ -15,8 +14,9 @@ from urllib.request import Request, urlopen
 
 
 DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "openai/gpt-oss-20b:free"
-DEFAULT_SYLLABLES_PER_SECOND = 4.5
+DEFAULT_MODEL = "google/gemini-3.8-flash"
+# Keep the dialogue limit aligned with the latest Colab prompt.
+DEFAULT_SYLLABLES_PER_SECOND = 3.5
 MAX_SCRIPT_DURATION_SECONDS = 30
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ SCRIPT_RESPONSE_SCHEMA = {
             "properties": {
                 "usp": {
                     "type": "string",
-                    "description": "상품의 Unique Selling Point. 입력된 값은 그대로 사용하고, 없으면 상품정보로 추론",
+                    "description": "해당 상품의 Unique Selling Point. USP 값을 입력받은 경우 입력받은 USP값을 그대로 출력해야 하며, 입력 받지 못한 경우 상품정보 항목의 내용에 근거하여 USP를 추론하여 작성하여 출력하여야 함.",
                 },
             },
         },
@@ -53,11 +53,11 @@ SCRIPT_RESPONSE_SCHEMA = {
             "properties": {
                 "main_target": {
                     "type": ["string", "null"],
-                    "description": "상품의 메인 타겟 고객",
+                    "description": "해당 상품의 메인 타겟 고객. 없으면 null",
                 },
                 "pain_point": {
                     "type": ["string", "null"],
-                    "description": "타겟 고객의 고민",
+                    "description": "해당 상품의 주요 타겟 고객이 가진 핵심 문제점 또는 불편함. 없으면 null.",
                 },
             },
         },
@@ -73,10 +73,10 @@ SCRIPT_RESPONSE_SCHEMA = {
                 "main_target",
             ],
             "properties": {
-                "goal": {"type": ["string", "null"], "description": "광고 목표. 없으면 null"},
-                "cta_action": {"type": "string", "description": "광고를 본 사용자가 할 행동"},
-                "channel_platform": {"type": "string", "description": "광고가 업로드되는 채널"},
-                "main_target": {"type": ["string", "null"], "description": "광고의 메인 타겟"},
+                "goal": {"type": ["string", "null"], "description": "해당 광고의 Goal. 없으면 null"},
+                "cta_action": {"type": "string", "description": "해당 광고의 CTA Action"},
+                "channel_platform": {"type": "string", "description": "해당 광고가 업로드되는 채널"},
+                "main_target": {"type": ["string", "null"], "description": "이번 광고에서 실제로 공략할 Target. 없으면 null"},
                 "ad_planner": {
                     "type": "object",
                     "additionalProperties": False,
@@ -84,7 +84,7 @@ SCRIPT_RESPONSE_SCHEMA = {
                     "properties": {
                         "persona": {
                             "type": ["string", "null"],
-                            "description": "광고 영상 기획자의 특성. 없으면 null",
+                            "description": "광고 영상 기획자의 특성을 의미합니다. 직책, 성격, 특성, 가치관, 과거 경력 등등. 없으면 null.",
                         }
                     },
                 },
@@ -95,11 +95,11 @@ SCRIPT_RESPONSE_SCHEMA = {
                     "properties": {
                         "persona": {
                             "type": ["string", "null"],
-                            "description": "화자의 성격·특성·가치관. 외형 묘사는 금지하며 없으면 null",
+                            "description": "화자의 특성을 의미합니다. 성격, 특성, 가치관, 과거 경력 등등. 외형 묘사 절대 금지. 없으면 null",
                         },
                         "tone": {
                             "type": ["string", "null"],
-                            "description": "광고 영상에 어울리는 화자의 말투. 없으면 null",
+                            "description": "해당 광고 영상에 어울리는 화자의 말투. 없으면 null",
                         },
                     },
                 },
@@ -108,26 +108,15 @@ SCRIPT_RESPONSE_SCHEMA = {
         "video": {
             "type": "object",
             "additionalProperties": False,
-            "required": [
-                "video_duration",
-                "required_scenes_elements",
-                "forbidden_scenes_elements",
-            ],
+            "required": ["video_duration"],
             "properties": {
-                "video_duration": {"type": "string", "description": "생성하는 광고 영상의 길이"},
-                "required_scenes_elements": {
-                    "type": ["string", "null"],
-                    "description": "반드시 포함할 시각·소품·연출 요소. 없으면 null",
-                },
-                "forbidden_scenes_elements": {
-                    "type": ["string", "null"],
-                    "description": "절대 포함하지 않을 시각·소품·연출 요소. 없으면 null",
-                },
+                "video_duration": {"type": "number", "minimum": 1, "description": "생성하는 광고 영상의 길이(초)"},
             },
         },
         "scenes": {
             "type": "array",
             "minItems": 1,
+            "maxItems": 3,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -137,6 +126,7 @@ SCRIPT_RESPONSE_SCHEMA = {
                     "visual",
                     "auditory",
                     "intent",
+                    "exclusion_list_about_physical_motions",
                     "notes",
                 ],
                 "properties": {
@@ -144,6 +134,7 @@ SCRIPT_RESPONSE_SCHEMA = {
                     "time_range_sec": {
                         "type": "object",
                         "additionalProperties": False,
+                        "description": "해당 장면이 재생되는 시작 및 종료 시간 범위(초)",
                         "required": ["start", "end"],
                         "properties": {
                             "start": {
@@ -160,8 +151,7 @@ SCRIPT_RESPONSE_SCHEMA = {
                     },
                     "visual": {
                         "type": "string",
-                        "maxLength": 99,
-                        "description": "영상 장면의 시각 요소 설명. 글자 수 100자 미만",
+                        "description": "영상 생성 모델에 입력할 시각 요소 설명. 피사체의 상태, 행동, 물리적 상호작용, 결과, 카메라 움직임을 구체적으로 작성한다. 300자 이내, 매우 구체적으로 작성. '사용할 촬영/편집 기법' 사용 시 해당 기법 명칭을 정확히 기입할 것. 불필요한 수식어는 제거",
                     },
                     "auditory": {
                         "type": "object",
@@ -170,21 +160,25 @@ SCRIPT_RESPONSE_SCHEMA = {
                         "properties": {
                             "subtitle": {
                                 "type": ["string", "null"],
-                                "description": "영상 장면의 Caption(텍스트 애니메이션)",
+                                "description": "영상의 부분 파트의 Caption(텍스트 애니메이션).",
                             },
                             "voiceover": {
                                 "type": ["string", "null"],
-                                "description": "영상 장면의 목소리 추가",
+                                "description": "영상의 부분 파트의 목소리 추가. 1초에 3.5음절 미만.",
                             },
                         },
                     },
                     "intent": {
                         "type": "string",
-                        "description": "영상 장면의 연출 의도 설명",
+                        "description": "영상의 부분 파트의 연출 의도 설명",
+                    },
+                    "exclusion_list_about_physical_motions": {
+                        "type": "string",
+                        "description": "해당 장면에서 포함되면 안되는 물리적 동작들. 'Physical-Safe Motion & Continuity', 'Physical-Safe Scene Selection'의 항목을 적극적으로 참고하여 작성할 것. 다양하게 작성. 구체적으로 작성할 것.",
                     },
                     "notes": {
                         "type": ["string", "null"],
-                        "description": "영상 장면의 기타 추가 설명. 없으면 null",
+                        "description": "영상의 부분 파트의 기타 추가설명. 없으면 null",
                     },
                 },
             },
@@ -196,11 +190,11 @@ SCRIPT_RESPONSE_SCHEMA = {
             "properties": {
                 "additional_information": {
                     "type": ["string", "null"],
-                    "description": "사용자가 입력한 추가사항. 없으면 null",
+                    "description": "유저가 입력한 다양한 추가사항. 없으면 null",
                 },
                 "video_ads_methodology": {
                     "type": ["string", "null"],
-                    "description": "광고 영상에 활용할 방법론. 없으면 null",
+                    "description": "해당 광고 영상에 활용할 다양한 방법론. 없으면 null",
                 },
             },
         },
@@ -362,7 +356,7 @@ def extract_cta_action(custom_prompt: str) -> str:
 
 
 def build_script_prompt(request: ScriptGenerationRequest) -> str:
-    """Build a constrained prompt from product data supplied by the caller."""
+    """Build the latest Colab script prompt with runtime values inserted."""
     product_prompt_fields = build_product_prompt_fields(request.product, request.reviews)
     custom_prompt = request.custom_prompt.strip() if request.custom_prompt else ""
     cta_action = extract_cta_action(custom_prompt)
@@ -382,6 +376,7 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 
 ### 상품 정보
 {product_prompt_fields}
+{f"\n\n{request.retry_instruction.strip()}" if request.retry_instruction and request.retry_instruction.strip() else ""}
 """
     return f"""
 당신은 공동구매 광고 숏폼 스크립트 작성자입니다.
@@ -397,51 +392,157 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 
 #### 2. 상품 정보
 (1) 비어있는 상품 정보들 중에, 유저가 프롬프트를 통해 해당 상품정보를 입력해주었다면, 이를 반영하여 비어 있는 상품 정보를 채워넣어라.
-(2) 입력된 상품 정보들 중에서 usp 값이 비어있으며 유저가 USP(Unique Selling Point)에 대한 정보를 제공하지 않았다면, 다른 상품정보 항목의 내용에 근거하여 USP(Unique Selling Point)를 추론하여 작성하라.
+(2) USP가 비어 있으면 다른 입력 상품정보에서 확인 가능한 차별점을 바탕으로 요약하여 작성한다.
+(3) 입력 정보에서 확인할 수 없는 차별점은 USP로 추론하지 않는다.
 
 #### 3. 핵심 원칙
-(1) 숏폼에서는 첫 1~3초 안에 계속 볼지 넘길지가 결정되기 때문에, 소비자의 문제나 관심사를 바로 건들여야 한다.
-(2) 이 상품이 어떤 상황에서 왜 좋은지를 보여주어야 한다.
-(3) 상품의 기능, 사용 장면처럼 소비자가 판단할 수 있는 정보가 들어가야 한다.
+(1) [최우선 원칙] 물리적 움직임을 사실적으로 생성하는 것보다, 물리적 움직임을 생성하지 않아도 광고 메시지를 전달할 수 있는 촬영 및 편집 방식을 우선한다.
+(2) 숏폼에서는 첫 1~3초 안에 계속 볼지 넘길지가 결정되기 때문에, 소비자의 문제나 관심사를 시각적으로 바로 건들여야 한다.
+(3) 이 상품이 어떤 상황에서 왜 좋은지를 보여주어야 한다.
+(4) 상품의 기능, 사용 장면처럼 소비자가 판단할 수 있는 시각적으로 정보가 들어가야 한다.
+  - 단, 'Physical-Safe Scene Selection'의 조건을 만족하여야 한다. 자세한 내용은 아래에 확인.
+(5) 등장인물이 행동해야 한다.
 
 #### 4. 영상 구현 구체성
 (1) 추상적 설명 대신 구체적 지시
-- 'Masterpiece', 'Hyper-realistic', 'Stunning', 'Cinematic'와 같은 추상적 표현 대신 카메라 용어, 조명 언어를 작성한다.
-  - 카메라 용어 예시: dolly, pan, tilt, crane, push-in, rack focus, locked-off
-  - 조명 용어 예시: Reduce fill, Cool down, Desaturate, Diffuse, Dim down, Reposition
+- 'Masterpiece', 'Hyper-realistic', 'Stunning', 'Cinematic'과 같은 추상적 표현 대신 구체적인 카메라/조명 용어를 사용한다.
+- 카메라 예시: locked-off, push-in, dolly, pan, tilt, rack focus
+- 조명 예시: Reduce fill, Cool down, Desaturate, Diffuse, Dim down, Reposition
+
 (2) 세부 규칙
 - 등장인물이 카메라를 주시하며 말하지 않는다.
-- 같은 인물의 얼굴, 헤어스타일, 의상이 장면마다 유지되도록 한다.
-- 상품 이미지의 형태, 색상, 라벨, 용기가 바뀌지 않도록 한다.
-- 영상 생성 모델이 만드는 영상 프레임에는 상품에 표기된 텍스트 외의 글자를 직접 넣지 않는다.
+- 동일 인물의 얼굴, 헤어스타일, 의상을 장면마다 유지한다.
+- 상품의 형태, 색상, 라벨, 용기가 변하지 않도록 한다.
+- 상품에 실제 표기된 텍스트 외의 텍스트를 추가하지 않는다.
+- 상품 라벨은 식별 가능한 정면 클로즈업을 피한다.
+
+(3) Physical-Safe Motion & Continuity
+- [필수] 광고 상품의 물리적 움직임을 생성하는 것은 극도로 자제하고, (아래의)'사용할 촬영/편집 기법'을 매우 적극적으로 활용하여 광고 메시지를 전달하는 방식을 우선한다.
+- 광고 상품의 물리적 움직임이 필요한 경우 아래의 규칙을 따른다
+  - 물리적으로 복잡한 장면보다 동일한 광고 메시지를 전달하는 더 단순한 장면을 선택한다.
+  - 액체, 불, 연기, 거품, 끈, 케이블 등 복잡한 물리 움직임은 동일한 메시지를 전달할 수 있다면 정지 상태 또는 컷 전환으로 대체한다.
+  - 하나의 Section에는 하나의 핵심 물리적 행동만 사용하며, 동시에 여러 주요 물체를 움직이지 않는다.
+  - 행동이 필요한 경우 하나의 방향과 단순한 인과관계로 제한하고, 불필요한 회전·충돌·반동·변형을 피한다.
+  - 물체는 중력과 지지면의 영향을 받으며, 손이나 다른 물체의 명확한 상호작용 없이 위치나 방향이 바뀌지 않는다.
+  - 물체의 생성·소멸·복제·순간이동·관통을 금지한다.
+  - 각 Section은 직전 Section의 주요 물체 위치, 방향, 상태 및 접촉 관계를 유지한다. 상태가 변경되면 행동 또는 명시적인 컷 전환으로 설명한다.
+  - 새로운 물체는 손에 들고 들어오거나 화면 밖에서 가져오는 등 등장 원인을 명확히 한다.
+  - 카메라 움직임과 피사체/물체 움직임은 별도로 작성한다.
+
+(4) [매우 중요] 사용할 촬영/편집 기법: 광고 상품의 물리적 움직임을 생성하는 것은 극도로 자제하는 대신 다음과 같은 기법을 통해 상품을 소개하라
+- Freeze Frame
+  - 기법 설명: 특정 순간의 한 프레임을 그대로 멈춰 피사체와 배경의 움직임을 완전히 차단하는 기법. 정지된 화면 위에 카피나 그래픽을 추가하기 좋음
+- Pose-to-Pose + Jump Cut
+  - 기법 설명: 연속적인 움직임을 생성하지 않고 핵심적인 포즈만 여러 개 만든 뒤 중간 동작을 컷으로 생략하는 방식. `Pose A → Cut → Pose B → Cut → Pose C` 구조
+- Whip Pan Transition
+  - 기법 설명: 카메라를 매우 빠르게 좌우 또는 상하로 움직여 강한 모션 블러를 만든 뒤, 블러가 발생한 순간 다른 장면으로 전환하는 기법
+- Object Occlusion Cut
+  - 기법 설명: 사람이나 물체가 카메라 앞을 지나가며 화면 전체를 가리는 순간 컷을 넣어 새로운 장면으로 연결하는 방식. 가려진 동안 장면의 물리적 연속성을 끊을 수 있음
+- Still Image + Camera Move
+  - 기법 설명: 피사체 자체는 정지시킨 채 카메라의 Zoom, Pan, Dolly, Orbit 등의 움직임만 주는 방식. 사진에 생명력을 불어넣는 듯한 효과
+- Bullet Time
+  - 기법 설명: 피사체의 특정 순간을 완전히 또는 거의 정지시키고 카메라가 피사체 주변을 이동하는 듯한 연출. 공중 점프나 액션 장면에 특히 효과적
+- Cinemagraph
+  - 기법 설명: 전체 화면은 정지된 사진처럼 유지하면서 머리카락, 연기, 물, 빛 등 일부 요소만 움직이게 하는 기법. '살아있는 사진' 느낌을 줌
+- Speed Ramp → Freeze
+  - 기법 설명: 정상 속도 또는 빠른 움직임에서 점차 Slow Motion으로 전환한 후 특정 순간에 완전히 Freeze하는 방식. 중요한 순간을 강조하기 좋음
+- Match Cut
+  - 기법 설명: 움직임을 직접 연결하지 않고 형태, 색상, 구도, 크기 등이 비슷한 두 장면을 이어 붙이는 기법. 서로 전혀 다른 공간도 자연스럽게 연결 가능
+
+(5) Visual 작성 구조
+- Visual은 가능한 한 다음 순서로 작성한다.
+  1. 피사체와 물체의 현재 상태
+  2. 피사체의 행동
+  3. 물리적 상호작용 및 결과
+  4. 카메라 움직임
+- 카메라 움직임은 피사체의 행동과 별도의 문장으로 작성한다.
+- 카메라 움직임이 피사체나 물체의 움직임을 유발하는 것처럼 표현하지 않는다
+
+(6) Physical-Safe Scene Selection: 광고 장면에서 '물체의 움직임이 필요하다면', 광고적으로 좋은 장면과 영상 생성 모델이 물리적으로 안정적으로 구현할 수 있는 장면의 교집합을 선택한다.
+
+a. Scene Selection Principle
+- 광고적으로 인상적인 행동이라도 물리적 구현 위험이 높다면 해당 행동을 선택하지 않는다.
+- 동일한 광고 메시지를 전달할 수 있다면, 더 단순하고 안정적인 물리적 행동을 우선 선택한다.
+- "더 화려한 행동"보다 "더 안정적으로 생성되는 행동"을 우선한다.
+- 물리적으로 복잡한 행동을 억지로 구현하지 말고, 동일한 의미를 전달하는 단순한 행동으로 대체한다.
+- 장면을 생성한 후 물리적 문제를 수정하는 것보다, 처음 장면을 선택하는 단계에서 위험한 행동을 제외한다.
+
+b. Physical Risk Priority: 다음 위험은 장면 선택 단계에서 우선적으로 제거한다.
+- P0: 반드시 피한다.
+  - 순간이동
+  - 갑작스러운 생성/소멸/복제
+  - 물체/신체 관통
+  - 접촉 없는 물체 이동
+  - 원인 없는 위치/방향 변화
+  - Section 간 상태 불일치
+
+- P1: 가능한 한 피한다.
+  - 갑작스러운 속도/방향 변화
+  - 중력에 반하는 움직임
+  - 공중에 떠 있는 물체
+  - 비현실적인 손/팔/관절 움직임
+  - 발 미끄러짐
+  - 옷/머리카락 관통
+  - 급격한 변형
+
+- P2: 필요하지 않으면 피한다.
+  - 여러 물체의 동시 이동
+  - 복잡한 액체/거품/연기/불
+  - 복잡한 충돌/반동
+  - 줄/케이블 얽힘
+  - 넘어짐/튕김/파손
+  - 복잡한 균형
+
+(7) Camera-Subject Motion Separation
+- 카메라 움직임과 피사체/물체 움직임은 별도로 작성한다.
+- Camera move가 피사체나 물체의 물리적 이동을 의미하지 않도록 한다.
+- 예: "제품은 테이블 위에서 정지해 있다. 카메라가 천천히 push-in한다."
+
+(8) Visual Realism
+- 자연스러운 피부결, 미세한 잡티, 옷 주름, 비대칭을 유지한다.
+- 물리적 상호작용이 있는 장면에서는 locked-off 또는 느린 push-in을 우선한다.
+- Handheld는 피사체와 주요 물체가 거의 정지된 장면에서만 사용한다.
 
 #### 5.  영상 내 상품 텍스트 노출 최소화
 - 상품 라벨의 글자와 로고는 식별 가능한 정면 클로즈업으로 보여주지 않는다.
 - 상품의 형태, 색상, 용기 구조는 유지하되 라벨은 비가독 상태로 표현한다.
-- 상품 라벨은 화면 바깥으로 일부 잘리거나, 손·소품·그림자에 의해 부분적으로 가려져야 한다.
-- 영상 생성 모델이 만드는 영상 프레임 안에는 자막, 가격, 할인율, CTA 문구를 직접 삽입하지 않는다.
+- 상품 라벨은 화면 바깥으로 일부 잘리거나, 손, 소품, 그림자에 의해 부분적으로 가려져야 한다.
 
-#### 6. HyperFrames 캡션
-- `auditory.subtitle`은 영상 생성 모델이 그리는 글자가 아니라, 영상 생성 후 HyperFrames가 별도로 추가하는 텍스트 애니메이션용 캡션이다.
-- `auditory.subtitle`은 `voiceover`와 구분하여 작성하고, 캡션으로 표시할 짧은 문구를 넣는다.
-- 캡션을 표시할 수 있도록 `auditory.subtitle`을 `null`이나 빈 문자열로 반환하지 않는다.
-- 영상 생성 모델의 `visual` 설명에는 자막·가격·할인율·CTA 문구를 넣지 않는다. 해당 문구는 `auditory.subtitle`로만 전달한다.
+#### 6. CTA 구현 규칙
+- CTA의 문구 자체는 Visual에 작성하지 않는다.
+- CTA에 해당하는 실제 행동이나 화면 연출만 Visual에 작성한다.
+- CTA 문구는 voiceover 또는 subtitle 등 별도의 auditory 필드에서 처리한다.
+- 마지막 Section의 Visual은 CTA 문구를 직접 표시하지 않고, CTA를 전달할 수 있는 제품 노출 또는 행동을 구성한다.
 
-#### 7. 기타
-(1) 영상 스크립트 내의 음성 대사는 1초에 4.5음절이 넘지 않도록 한다.
-각 장면의 대사 음절 수가 해당 장면 시간 × 4.5를 넘지 않도록 작성하세요.
-대사는 장면 시간 안에 읽을 수 있도록 짧게 작성하세요.
-- 각 장면의 허용 음절 수는 장면 시간(초) × 4.5를 계산한 뒤 소수점 이하는 버린다.
-- 예를 들어 장면 시간이 2초이면 최대 9음절, 1.5초이면 최대 6음절이다.
-- 허용 음절 수를 단 1개라도 초과하는 voiceover는 작성하지 않는다.
-- 대사를 작성한 뒤 각 장면의 voiceover 음절 수를 직접 확인하고, 제한을 초과하면 더 짧게 다시 작성한다.
-- 장면 시간이 짧은 경우 한두 단어 수준으로 간결하게 작성한다.
+#### 7. Section 구성 규칙
+- 전체 영상은 1~3개 Section으로 구성한다.
+- 각 Section에는 하나의 핵심 행동 또는 연속적인 행동 시퀀스만 포함한다.
+- 독립적인 행동은 분리하고, 불필요한 물체나 행동을 추가하지 않는다.
+- 각 Section은 직전 Section의 마지막 상태에서 자연스럽게 이어진다.
+- 짧은 Section을 여러 개 만드는 것보다, 하나의 행동을 충분한 시간 동안 자연스럽게 보여주는 것을 우선한다.
+- 물리적으로 복잡한 행동이나 물체 간 상호작용이 필요한 경우, Section 수를 늘리는 대신 해당 행동에 더 긴 Time Range를 할당한다.
+- 마지막 Section의 Visual에는 CTA 문구를 작성하지 않는다.
+- 마지막 Section의 auditory에는 CTA Action에 부합하는 voiceover 또는 subtitle을 포함한다.
+
+#### 8. Time Range 규칙
+- 첫 Section의 start는 반드시 0이다.
+- 각 Section의 end는 start보다 커야 한다.
+- 이전 Section의 end와 다음 Section의 start는 동일해야 한다.
+- Section 사이에 시간 공백이나 중복이 없어야 한다.
+- 마지막 Section의 end는 Video duration과 동일해야 한다.
+
+#### 9. Physical Constraint와 상품 사실의 충돌 방지
+- 상품의 구조, 기능, 재질, 사용 방법 등 상품 자체에 관한 물리적 특성은 입력된 상품 정보에 없는 내용을 임의로 추론하지 않는다.
+- 물리적 연속성을 표현하기 위해 필요한 경우에도 상품 정보에 없는 기능이나 구조를 새롭게 만들어내지 않는다.
+- 입력된 상품 정보로 확인할 수 없는 물리적 특성은 단정적으로 표현하지 않는다.
+
+#### 10. 기타
+(1) 영상 스크립트 내의 음성 대사는 1초에 3.5음절이 넘지 않도록 한다.
 
 ### Methodology
 
 #### 필수 방법론
-- 영상 마지막 부분에 CTA(Call To Action)을 추가
-\t- 'scenes' 부분의 가장 마지막 Section에는 유저가 해당 광고를 보고 특정한 액션을 취할 수 있어야 한다.
+- 'subtitle'과 'voiceover'의 내용이 동일할 필요는 없습니다.
 
 #### 선택 방법론
 - Hook-Body-CTA
@@ -449,28 +550,20 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - AIDA
 - BAB(Before-After-Bridge)
 - 4Ps(Promise-Picture-Proof-Push)
-- Anti-Slop Prompt For Video: 현실성 있는 영상을 위해 불완전성(imperfection)을 더하라
-\t- Product
-\t\t- signs of use(제품 사용 흔적)
-\t- Camera
-\t\t- slight handheld motion(약간의 핸드헬드 움직임)
-\t- People
-\t\t- imperfect skin texture(고르지 않은 피부결)
-\t\t- subtle blemishes(미세한 잡티)
-\t\t- wrinkled fabric(주름진 옷감)
-\t\t- natural and subtle asymmetry(자연스럽고 미세한 비대칭)
-
 
 ### 요구사항
 - CTA Action: {cta_action}
 - Video duration: {request.max_duration_seconds}
 - Upload Channel: {request.channel}
+= Ads Video Style: 상품의 우수성을 시각적으로 보여주고 싶어서 안달이 난, 인스타그램 인플루언서 내돈내산 릴스 영상 스타일
+
+### 인물 정보
+- Character Profile: 차분하지 않음
 
 ### 상품 정보
 {product_prompt_fields}
 {f"\n\n{request.retry_instruction.strip()}" if request.retry_instruction and request.retry_instruction.strip() else ""}
 """
-
 
 def build_script_message_content(
     request: ScriptGenerationRequest,
@@ -528,6 +621,8 @@ def validate_script_document(
     scenes = document.get("scenes")
     if not isinstance(scenes, list) or not scenes:
         raise ScriptValidationError("스크립트에는 하나 이상의 scenes가 필요합니다.")
+    if len(scenes) > 3:
+        raise ScriptValidationError("스크립트의 scenes는 최대 3개까지 가능합니다.")
 
     meta = document.get("meta")
     if not isinstance(meta, Mapping):
@@ -552,8 +647,6 @@ def validate_script_document(
         ),
         "video": (
             "video_duration",
-            "required_scenes_elements",
-            "forbidden_scenes_elements",
         ),
         "etc": ("additional_information", "video_ads_methodology"),
     }.items():
@@ -595,7 +688,14 @@ def validate_script_document(
             raise ScriptValidationError(
                 f"{index}번째 scene의 time_range_sec가 올바르지 않습니다."
             )
-        required_fields = ("section", "visual", "auditory", "intent", "notes")
+        required_fields = (
+            "section",
+            "visual",
+            "auditory",
+            "intent",
+            "exclusion_list_about_physical_motions",
+            "notes",
+        )
         if any(field not in scene for field in required_fields):
             raise ScriptValidationError(
                 f"{index}번째 scene에 필수 출력 필드가 누락되었습니다."
@@ -606,10 +706,8 @@ def validate_script_document(
             raise ScriptValidationError(
                 f"{index}번째 scene의 visual이 필요합니다."
             )
-        if len(scene["visual"]) >= 100:
-            raise ScriptValidationError(
-                f"{index}번째 scene의 visual은 100자 미만이어야 합니다."
-            )
+        if len(scene["visual"]) > 300:
+            raise ScriptValidationError(f"{index}번째 scene의 visual은 300자 이내여야 합니다.")
         if not isinstance(scene.get("intent"), str) or not scene["intent"].strip():
             raise ScriptValidationError(f"{index}번째 scene의 intent가 필요합니다.")
         auditory = scene.get("auditory")
