@@ -14,6 +14,7 @@ from app.script_generator import (
     ScriptValidationError,
     SCRIPT_RESPONSE_SCHEMA,
     build_script_prompt,
+    get_default_script_prompt_preview,
     build_script_message_content,
     extract_script_json,
     validate_script_document,

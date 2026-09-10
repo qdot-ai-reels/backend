@@ -11,6 +11,7 @@ from app.api.v1.tts import router as tts_router
 from app.api.v1.settings import router as settings_router
 from app.api.v1.caption import router as caption_router
 from app.api.v1.combine import combine_router
+from app.api.v1.prompts import router as prompts_router
 from app.db import init_db
 
 
@@ -44,6 +45,7 @@ app.include_router(tts_router, prefix="/api/v1/reels", tags=["reels"])
 app.include_router(settings_router, prefix="/api/v1", tags=["settings"])
 app.include_router(caption_router, prefix="/api/v1/reels", tags=["reels"])
 app.include_router(combine_router, prefix="/api/v1/reels", tags=["reels"])
+app.include_router(prompts_router, prefix="/api/v1/reels", tags=["reels"])
 
 @app.get("/health")
 def health_check():
