@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from json import JSONDecodeError
 from copy import deepcopy
 from typing import Any, Callable, Mapping
@@ -326,7 +326,14 @@ def _format_product_prompt_value(value: Any) -> str:
 def build_product_prompt_fields(
     product: Mapping[str, Any], reviews: list[Any] | None
 ) -> str:
-    """Render the product section in the same order and shape as the Colab prompt."""
+    """Render the selected product's usable JSON fields for the model prompt."""
+    product_name = product.get("name", product.get("product_name"))
+    option1 = product.get("option1")
+    option2 = product.get("option2")
+    consumer_price = product.get("consumer_price")
+    sale_price = product.get("base_sale_price")
+    lowest_price = product.get("lowest_price")
+    discount_rate = product.get("discount_rate_derived")
     selling_point = product.get("selling_point", product.get("selling_points"))
     usp = product.get("usp")
     curator_pitch = product.get("curator_pitch")
@@ -336,6 +343,13 @@ def build_product_prompt_fields(
     product_reviews = product.get("reviews", reviews or [])
     return "\n".join(
         [
+            f"- Product Name: {_format_product_prompt_value(product_name)}",
+            f"- Option 1: {_format_product_prompt_value(option1)}",
+            f"- Option 2: {_format_product_prompt_value(option2)}",
+            f"- Consumer Price (consumer_price): {_format_product_prompt_value(consumer_price)}",
+            f"- Sale Price (base_sale_price): {_format_product_prompt_value(sale_price)}",
+            f"- Lowest Price (lowest_price): {_format_product_prompt_value(lowest_price)}",
+            f"- Discount Rate (discount_rate_derived): {_format_product_prompt_value(discount_rate)}",
             f"- Selling Point: {_format_product_prompt_value(selling_point)}",
             f"- USP(Unique Selling Point): {_format_product_prompt_value(usp)}",
             "\t- USP(Unique Selling Point)값이 null이면",
@@ -365,6 +379,33 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
     product_prompt_fields = build_product_prompt_fields(request.product, request.reviews)
     custom_prompt = request.custom_prompt.strip() if request.custom_prompt else ""
     cta_action = extract_cta_action(custom_prompt)
+
+    if not request.use_default_prompt:
+        return f"""
+당신은 공동구매 광고 숏폼 스크립트 작성자입니다.
+
+### 사용자 지정 프롬프트
+{custom_prompt}
+
+### 요구사항
+- CTA Action: {cta_action}
+- Video duration: {request.max_duration_seconds}
+- Upload Channel: {request.channel}
+- 상품 정보에 없는 사실이나 과장 표현을 만들지 마세요.
+- 선택된 상품 정보에 존재하는 Product Name, Option, Consumer Price, Sale Price, Lowest Price, Discount Rate, Selling Point, USP, Curator Pitch, Hashtags, Description Text, Detail Info, Reviews를 우선적으로 활용하세요.
+- 가격·할인율 값이 null이면 언급하지 말고, 값이 있으면 상품 정보에 표시된 숫자를 그대로 사용하세요.
+- 반드시 scenes 배열을 1개 이상 포함하세요. scenes가 없거나 빈 배열이면 안 됩니다.
+- 각 scene에는 section, time_range_sec, visual, auditory, intent, exclusion_list_about_physical_motions, notes를 모두 포함하세요.
+- 첫 scene의 시작 시간은 0이고, scene 시간은 빈틈이나 겹침 없이 이어지며 마지막 scene의 종료 시간은 video.video_duration과 같아야 합니다.
+- 각 scene의 voiceover는 장면 시간의 80% 이내에 끝나도록 짧게 작성하세요.
+- 출력은 기존 Structured Output JSON 형식을 따르고 하나 이상의 scenes를 포함하세요.
+
+### 상품 정보
+{product_prompt_fields}
+{f"\n\n{request.retry_instruction.strip()}" if request.retry_instruction and request.retry_instruction.strip() else ""}
+"""
+
+
     return f"""
 당신은 공동구매 광고 숏폼 스크립트 작성자입니다.
 
@@ -385,6 +426,7 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 (1) 숏폼에서는 첫 1~3초 안에 계속 볼지 넘길지가 결정되기 때문에, 소비자의 문제나 관심사를 바로 건들여야 한다.
 (2) 이 상품이 어떤 상황에서 왜 좋은지를 보여주어야 한다.
 (3) 상품의 기능, 사용 장면처럼 소비자가 판단할 수 있는 정보가 들어가야 한다.
+
 
 #### 4. 영상 구현 구체성
 (1) 추상적 설명 대신 구체적 지시
@@ -760,6 +802,29 @@ def _is_retryable_provider_error(error: OpenRouterRequestError) -> bool:
     return False
 
 
+def _build_validation_retry_instruction(error: ScriptValidationError) -> str:
+    """Turn validation failures into concrete instructions for the next model attempt."""
+    message = str(error)
+    if "scenes" in message:
+        return (
+            "이전 응답은 scenes가 없거나 빈 배열이어서 사용할 수 없습니다. "
+            "이번 응답에는 반드시 1~3개의 scenes 배열을 포함하세요. "
+            "각 scene에 section, time_range_sec, visual, auditory, intent, "
+            "exclusion_list_about_physical_motions, notes를 모두 넣고, "
+            "time_range_sec는 0초부터 영상 끝까지 빈틈이나 겹침 없이 연결하세요."
+        )
+    if "voiceover" in message or "대사" in message:
+        return (
+            "이전 응답의 voiceover가 장면 시간보다 길거나 voiceover 필드가 올바르지 않았습니다. "
+            "각 장면의 voiceover를 장면 길이의 80% 이내로 줄이고, 필요하면 null 또는 짧은 한 문장으로 작성하세요."
+        )
+    return (
+        "이전 응답은 출력 스키마 또는 장면 검증에 실패했습니다. "
+        "기존 JSON 스키마의 모든 필수 필드를 빠짐없이 포함하고, scenes를 1개 이상 생성하세요. "
+        f"검증 오류: {message}"
+    )
+
+
 class OpenRouterClient:
     """Small dependency-injectable client for OpenRouter script generation."""
 
@@ -813,13 +878,27 @@ class OpenRouterClient:
         if self.fallback_model and self.fallback_model != self.model:
             models.append(self.fallback_model)
 
+        current_request = request
         for attempt in range(self.max_attempts):
-            # 재시도에서도 Colab과 동일한 prompt를 유지한다.
             model = models[min(attempt, len(models) - 1)]
             try:
-                return self._generate_once(request, model)
+                return self._generate_once(current_request, model, attempt=attempt)
             except ScriptValidationError as error:
                 last_error = error
+                if (
+                    attempt < self.max_attempts - 1
+                    and not isinstance(error, ScriptDialogueLengthError)
+                ):
+                    current_request = replace(
+                        current_request,
+                        retry_instruction=_build_validation_retry_instruction(error),
+                    )
+                    logger.warning(
+                        "script validation failed; retrying with repair instructions: "
+                        "attempt=%s error=%s",
+                        attempt + 1,
+                        error,
+                    )
             except OpenRouterRequestError as error:
                 if not _is_retryable_provider_error(error):
                     raise
@@ -830,6 +909,8 @@ class OpenRouterClient:
 
         assert last_error is not None
         raise last_error
+
+
     def _generate_once(
         self,
         request: ScriptGenerationRequest,
