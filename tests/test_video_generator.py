@@ -34,6 +34,7 @@ SCRIPT = {
                 "subtitle": "상품 소개",
                 "voiceover": "상품을 소개합니다.",
             },
+            "exclusion_list_about_physical_motions": "순간이동, 복제, 관통",
             "notes": "상품 소개",
         }
     ],
@@ -193,8 +194,8 @@ class VideoGeneratorTests(unittest.TestCase):
     def test_includes_full_script_context_in_video_prompt(self):
         prompt = build_video_prompt(CURRENT_SCRIPT)
 
-        self.assertIn("| Section | Time Range | Visual |", prompt)
-        self.assertIn("| 1 | 0s - 8s | 상품을 화면 중앙에 보여준다. |", prompt)
+        self.assertIn("| Section | Time Range | Visual | Exclusion List About Physical Motions |", prompt)
+        self.assertIn("| 1 | 0s - 8s | 상품을 화면 중앙에 보여준다. | 순간이동, 복제, 관통 |", prompt)
         self.assertNotIn("스파우트 30포 구성", prompt)
         self.assertNotIn("상품 라벨", prompt)
         self.assertNotIn("Hook-Body-CTA", prompt)
@@ -205,9 +206,9 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertEqual(
             formatted,
             "\n".join([
-                "| Section | Time Range | Visual |",
-                "| --- | --- | --- |",
-                "| 1 | 0s - 8s | 상품을 화면 중앙에 보여준다. |",
+                "| Section | Time Range | Visual | Exclusion List About Physical Motions |",
+                "| --- | --- | --- | --- |",
+                "| 1 | 0s - 8s | 상품을 화면 중앙에 보여준다. | 순간이동, 복제, 관통 |",
             ]),
         )
         self.assertNotIn("상품 소개", formatted)
@@ -221,7 +222,7 @@ class VideoGeneratorTests(unittest.TestCase):
             }],
         })
 
-        self.assertIn("| 1 | 0s - 1s | 장면 |", formatted)
+        self.assertIn("| 1 | 0s - 1s | 장면 |  |", formatted)
         self.assertNotIn("| Hook |", formatted)
 
     def test_formats_json_string_as_documented(self):
@@ -233,7 +234,7 @@ class VideoGeneratorTests(unittest.TestCase):
             }],
         }))
 
-        self.assertIn("| 1 | 0s - 1s | 장면 |", formatted)
+        self.assertIn("| 1 | 0s - 1s | 장면 |  |", formatted)
 
     def test_submits_video_job_and_polls_until_completed(self):
         opener = SequentialOpener([
@@ -329,7 +330,6 @@ class VideoGeneratorTests(unittest.TestCase):
             ["https://example.com/influencer.jpg", "https://example.com/product.jpg"],
         )
         self.assertIn("Use the provided character image as the character reference", request_body["prompt"])
-        self.assertIn("The AI influencer must be clearly visible on screen", request_body["prompt"])
 
     def test_video_prompt_includes_documented_person_and_label_rules(self):
         prompt = build_video_prompt(SCRIPT, has_influencer_image=True)
@@ -337,6 +337,7 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertIn("Use the provided character image as the character reference", prompt)
         self.assertIn("A frontal view is not required", prompt)
         self.assertIn("Fine clothing wrinkles", prompt)
+        self.assertIn("Natural, subtle asymmetry", prompt)
         self.assertIn("Do not intentionally show product text in close-ups where it is clearly readable", prompt)
 
     def test_submits_first_valid_product_detail_image_after_influencer_and_main_image(self):

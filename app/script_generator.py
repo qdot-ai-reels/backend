@@ -1,5 +1,4 @@
 """Generate structured short-form scripts through the OpenRouter chat API."""
-
 from __future__ import annotations
 
 import json
@@ -15,7 +14,8 @@ from urllib.request import Request, urlopen
 
 
 DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "openai/gpt-oss-20b:free"
+DEFAULT_MODEL = "google/gemini-3.8-flash"
+# Keep the dialogue limit aligned with the latest Colab prompt.
 DEFAULT_SYLLABLES_PER_SECOND = 3.5
 MAX_SCRIPT_DURATION_SECONDS = 30
 logger = logging.getLogger(__name__)
@@ -134,6 +134,7 @@ SCRIPT_RESPONSE_SCHEMA = {
                     "time_range_sec": {
                         "type": "object",
                         "additionalProperties": False,
+                        "description": "해당 장면이 재생되는 시작 및 종료 시간 범위(초)",
                         "required": ["start", "end"],
                         "properties": {
                             "start": {
@@ -159,11 +160,11 @@ SCRIPT_RESPONSE_SCHEMA = {
                         "properties": {
                             "subtitle": {
                                 "type": ["string", "null"],
-                                "description": "영상 장면의 Caption(텍스트 애니메이션)",
+                                "description": "영상의 부분 파트의 Caption(텍스트 애니메이션).",
                             },
                             "voiceover": {
                                 "type": ["string", "null"],
-                                "description": "영상 장면의 목소리 추가",
+                                "description": "영상의 부분 파트의 목소리 추가. 1초에 3.5음절 미만.",
                             },
                         },
                     },
@@ -355,7 +356,7 @@ def extract_cta_action(custom_prompt: str) -> str:
 
 
 def build_script_prompt(request: ScriptGenerationRequest) -> str:
-    """Build a constrained prompt from product data supplied by the caller."""
+    """Build the latest Colab script prompt with runtime values inserted."""
     product_prompt_fields = build_product_prompt_fields(request.product, request.reviews)
     custom_prompt = request.custom_prompt.strip() if request.custom_prompt else ""
     cta_action = extract_cta_action(custom_prompt)
@@ -604,8 +605,6 @@ def get_default_script_prompt_preview() -> str:
             channel="Instagram Reels",
         )
     ).strip()
-
-
 def build_script_message_content(
     request: ScriptGenerationRequest,
     prompt: str,
@@ -662,6 +661,8 @@ def validate_script_document(
     scenes = document.get("scenes")
     if not isinstance(scenes, list) or not scenes:
         raise ScriptValidationError("스크립트에는 하나 이상의 scenes가 필요합니다.")
+    if len(scenes) > 3:
+        raise ScriptValidationError("스크립트의 scenes는 최대 3개까지 가능합니다.")
 
     meta = document.get("meta")
     if not isinstance(meta, Mapping):
@@ -743,6 +744,8 @@ def validate_script_document(
             raise ScriptValidationError(
                 f"{index}번째 scene의 visual이 필요합니다."
             )
+        if len(scene["visual"]) > 300:
+            raise ScriptValidationError(f"{index}번째 scene의 visual은 300자 이내여야 합니다.")
         if not isinstance(scene.get("intent"), str) or not scene["intent"].strip():
             raise ScriptValidationError(f"{index}번째 scene의 intent가 필요합니다.")
         exclusion_list = scene.get("exclusion_list_about_physical_motions")

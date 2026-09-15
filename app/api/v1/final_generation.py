@@ -76,6 +76,7 @@ class FinalGenerationBody(BaseModel):
     max_duration_seconds: int | None = Field(default=None, ge=1, le=30)
     channel: str = "Instagram Reels"
     target_audience: str = "육아에 관심 있는 보호자"
+    allow_script_regeneration: bool = True
 
 
 def validate_product_image_inputs(
@@ -244,12 +245,15 @@ def _generate_narration_with_script_regeneration(
         inferred_duration = _script_duration_seconds(current_script)
         if inferred_duration is not None:
             regeneration_payload["max_duration_seconds"] = inferred_duration
+    allow_script_regeneration = bool(payload.get("allow_script_regeneration", True))
     for regeneration in range(MAX_SCRIPT_REGENERATIONS + 1):
         if set_stage is not None:
             set_stage("TTS_GENERATION")
         try:
             return current_script, tts_client.generate_narration(current_script)
         except SceneAudioDurationError as error:
+            if not allow_script_regeneration:
+                raise
             if regeneration >= MAX_SCRIPT_REGENERATIONS:
                 raise
             if set_stage is not None:

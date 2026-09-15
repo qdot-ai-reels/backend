@@ -14,6 +14,7 @@ from app.script_generator import (
     ScriptValidationError,
     SCRIPT_RESPONSE_SCHEMA,
     build_script_prompt,
+    get_default_script_prompt_preview,
     build_script_message_content,
     extract_script_json,
     validate_script_document,
@@ -63,7 +64,7 @@ VALID_DOCUMENT = {
                 "voiceover": "성분 확인하세요.",
             },
             "intent": "제품을 먼저 보여준다.",
-            "exclusion_list_about_physical_motions": "제품의 순간이동과 형태 변형",
+            "exclusion_list_about_physical_motions": "순간이동, 복제, 관통",
             "notes": "제품을 먼저 보여준다.",
         }
     ],
@@ -351,7 +352,7 @@ class ScriptGeneratorTests(unittest.TestCase):
         with self.assertRaises(OpenRouterConfigurationError):
             client.generate_script(ScriptGenerationRequest(product=PRODUCT))
 
-    def test_uses_free_default_model_when_script_model_environment_variable_is_blank(self):
+    def test_uses_colab_script_model_when_script_model_environment_variable_is_blank(self):
         with patch.dict(
             os.environ,
             {"OPENROUTER_SCRIPT_MODEL": "", "OPENROUTER_FALLBACK_MODEL": ""},
@@ -359,7 +360,7 @@ class ScriptGeneratorTests(unittest.TestCase):
         ):
             client = OpenRouterClient.from_env()
 
-        self.assertEqual(client.model, "openai/gpt-oss-20b:free")
+        self.assertEqual(client.model, "google/gemini-3.8-flash")
         self.assertEqual(client.fallback_model, client.model)
 
     def test_defaults_fallback_model_to_configured_script_model(self):
@@ -566,6 +567,7 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("Hook-Body-CTA", prompt)
         self.assertIn("PAS", prompt)
         self.assertIn("Physical-Safe Motion & Continuity", prompt)
+        self.assertIn("Physical-Safe Scene Selection", prompt)
 
     def test_includes_all_script_prompt_260830_1_video_direction_rules(self):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
@@ -577,12 +579,17 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("동일 인물의 얼굴, 헤어스타일, 의상을 장면마다 유지", prompt)
         self.assertIn("상품 라벨의 글자와 로고는 식별 가능한 정면 클로즈업으로 보여주지 않는다", prompt)
         self.assertIn("CTA의 문구 자체는 Visual에 작성하지 않는다", prompt)
+        self.assertIn("Visual Realism", prompt)
+        self.assertIn("상품 라벨은 식별 가능한 정면 클로즈업을 피한다", prompt)
+        self.assertIn("상품에 실제 표기된 텍스트 외의 텍스트를 추가하지 않는다", prompt)
 
     def test_uses_notion_cta_rules_for_auditory_fields(self):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
 
         self.assertIn("CTA 문구는 voiceover 또는 subtitle", prompt)
         self.assertIn("마지막 Section의 auditory", prompt)
+        self.assertNotIn("HyperFrames가 별도로 추가하는 텍스트 애니메이션용 캡션", prompt)
+        self.assertNotIn("subtitle`을 `null`이나 빈 문자열로 반환하지 않는다", prompt)
 
     def test_includes_all_260830_1_content_rules(self):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
@@ -596,6 +603,9 @@ class ScriptGeneratorTests(unittest.TestCase):
             "물리적 움직임을 생성하지 않아도 광고 메시지를 전달",
             "Physical-Safe Scene Selection",
             "자연스러운 피부결",
+            "미세한 잡티",
+            "옷 주름",
+            "비대칭",
         )
         for rule in expected_rules:
             self.assertIn(rule, prompt)
@@ -607,6 +617,13 @@ class ScriptGeneratorTests(unittest.TestCase):
         scene_schema = SCRIPT_RESPONSE_SCHEMA["properties"]["scenes"]["items"]
         self.assertEqual(SCRIPT_RESPONSE_SCHEMA["properties"]["scenes"]["maxItems"], 3)
         self.assertIn("exclusion_list_about_physical_motions", scene_schema["required"])
+
+    def test_rejects_visual_that_exceeds_300_characters(self):
+        document = json.loads(json.dumps(VALID_DOCUMENT))
+        document["scenes"][0]["visual"] = "가" * 301
+
+        with self.assertRaisesRegex(ScriptValidationError, "visual"):
+            validate_script_document(document)
 
     def test_adds_product_image_to_multimodal_message(self):
         request = ScriptGenerationRequest(

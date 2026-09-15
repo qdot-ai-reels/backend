@@ -72,12 +72,6 @@ VIDEO_CONDITION_PROMPT = """
 - Objects held by a person must not suddenly change, disappear, duplicate, or be replaced.
 """
 
-INFLUENCER_VISIBILITY_PROMPT = (
-    "\n\nThe AI influencer must be clearly visible on screen. "
-    "Do not replace the influencer with only a hand, finger, or an off-screen action."
-)
-
-
 class VideoGenerationError(RuntimeError):
     """Raised when a video generation job cannot be completed."""
 
@@ -130,15 +124,15 @@ def build_video_prompt(
     custom_prompt: str | None = None,
     use_default_prompt: bool = True,
 ) -> str:
-    """Combine scene instructions with either the default or custom video prompt."""
-    visibility_prompt = INFLUENCER_VISIBILITY_PROMPT if has_influencer_image else ""
+    """Convert a validated script document using the Colab prompt verbatim."""
+    prompt = convert_dict_to_formatted_text(script)
     if use_default_prompt:
-        condition_prompt = VIDEO_CONDITION_PROMPT
+        prompt += "\n\n" + VIDEO_CONDITION_PROMPT
     elif custom_prompt and custom_prompt.strip():
-        condition_prompt = custom_prompt.strip()
+        prompt += "\n\n### User video instructions\n" + custom_prompt.strip()
     else:
         raise ValueError("영상 프롬프트가 비어 있습니다.")
-    return convert_dict_to_formatted_text(script) + "\n\n" + condition_prompt + visibility_prompt
+    return prompt
 
 
 def convert_dict_to_formatted_text(data: Mapping[str, Any] | str) -> str:
@@ -152,8 +146,8 @@ def convert_dict_to_formatted_text(data: Mapping[str, Any] | str) -> str:
         return ""
 
     rows = [
-        "| Section | Time Range | Visual |",
-        "| --- | --- | --- |",
+        "| Section | Time Range | Visual | Exclusion List About Physical Motions |",
+        "| --- | --- | --- | --- |",
     ]
     for index, scene in enumerate(scenes, start=1):
         if not isinstance(scene, Mapping):
@@ -164,7 +158,9 @@ def convert_dict_to_formatted_text(data: Mapping[str, Any] | str) -> str:
         start = time_range.get("start", 0)
         end = time_range.get("end", 0)
         visual = str(scene.get("visual", "")).replace("|", "\\|").replace("\n", " ")
-        rows.append(f"| {index} | {start}s - {end}s | {visual} |")
+        exclusion = str(scene.get("exclusion_list_about_physical_motions", ""))
+        exclusion = exclusion.replace("|", "\\|").replace("\n", " ")
+        rows.append(f"| {index} | {start}s - {end}s | {visual} | {exclusion} |")
     return "\n".join(rows)
 
 
