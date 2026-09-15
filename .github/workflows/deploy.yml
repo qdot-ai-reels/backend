@@ -31,6 +31,11 @@ jobs:
 
             git pull --ff-only origin main
 
+            # Generated videos are bind-mounted at runtime and excluded from the
+            # build context. Clear only unused Docker data before rebuilding.
+            docker builder prune --all --force
+            docker image prune --all --force
+
             docker compose up -d --build
 
             for i in {1..12}; do
