@@ -12,3 +12,6 @@ venv/
 .vscode/
 .idea/
 README.md
+runtime/
+.pytest_cache/
+*.log
