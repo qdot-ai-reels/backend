@@ -163,9 +163,32 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertIn("상품을 화면 중앙에 보여준다.", prompt)
         self.assertNotIn("자막=상품 소개", prompt)
         self.assertNotIn("내레이션=상품을 소개합니다.", prompt)
-        self.assertIn("- No added subtitles, captions, price, discount, or CTA text.", prompt)
-        self.assertIn("- Preserve the provided product's shape, color, package structure, and label placement.", prompt)
-        self.assertTrue(prompt.index("| Section | Time Range | Visual |") < prompt.index("### Condition"))
+        self.assertIn("- Do not add subtitles, captions, prices, discounts, or CTA text.", prompt)
+        self.assertIn("- Preserve the provided product's shape, color, structure, and identity.", prompt)
+        self.assertTrue(prompt.index("| Section | Time Range | Visual |") < prompt.index("# Requirements"))
+
+    def test_uses_the_full_notion_video_condition_prompt(self):
+        prompt = build_video_prompt(SCRIPT)
+
+        self.assertIn("# Requirements", prompt)
+        self.assertIn("Actively apply the “Filming/Editing Techniques” specified in the table.", prompt)
+        self.assertIn("Follow realistic physical laws and temporal continuity.", prompt)
+        self.assertIn("Do not generate teleportation, floating, interpenetration, merging, duplication, disappearance, or unexplained transformations.", prompt)
+        self.assertIn("Objects held by a person must not suddenly change, disappear, duplicate, or be replaced.", prompt)
+
+    def test_custom_video_prompt_replaces_default_condition_prompt(self):
+        prompt = build_video_prompt(
+            SCRIPT,
+            custom_prompt="Show a side-angle product-use scene.",
+            use_default_prompt=False,
+        )
+
+        self.assertIn("Show a side-angle product-use scene.", prompt)
+        self.assertNotIn("# Requirements", prompt)
+
+    def test_custom_video_prompt_requires_nonempty_text(self):
+        with self.assertRaisesRegex(ValueError, "영상 프롬프트가 비어 있습니다"):
+            build_video_prompt(SCRIPT, custom_prompt="  ", use_default_prompt=False)
 
     def test_includes_full_script_context_in_video_prompt(self):
         prompt = build_video_prompt(CURRENT_SCRIPT)
@@ -305,16 +328,16 @@ class VideoGeneratorTests(unittest.TestCase):
             [item["image_url"]["url"] for item in request_body["input_references"]],
             ["https://example.com/influencer.jpg", "https://example.com/product.jpg"],
         )
-        self.assertIn("Use the provided person image as the character reference", request_body["prompt"])
+        self.assertIn("Use the provided character image as the character reference", request_body["prompt"])
         self.assertIn("The AI influencer must be clearly visible on screen", request_body["prompt"])
 
     def test_video_prompt_includes_documented_person_and_label_rules(self):
         prompt = build_video_prompt(SCRIPT, has_influencer_image=True)
 
-        self.assertIn("Use the provided person image as the character reference", prompt)
-        self.assertIn("Front-facing appearance is not required", prompt)
-        self.assertIn("slight handheld motion", prompt)
-        self.assertIn("Do not intentionally show product text in a readable close-up", prompt)
+        self.assertIn("Use the provided character image as the character reference", prompt)
+        self.assertIn("A frontal view is not required", prompt)
+        self.assertIn("Fine clothing wrinkles", prompt)
+        self.assertIn("Do not intentionally show product text in close-ups where it is clearly readable", prompt)
 
     def test_submits_first_valid_product_detail_image_after_influencer_and_main_image(self):
         opener = SequentialOpener([
