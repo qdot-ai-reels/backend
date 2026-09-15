@@ -166,7 +166,30 @@ class VideoGeneratorTests(unittest.TestCase):
         self.assertNotIn("내레이션=상품을 소개합니다.", prompt)
         self.assertIn("- Do not add subtitles, captions, prices, discounts, or CTA text.", prompt)
         self.assertIn("- Preserve the provided product's shape, color, structure, and identity.", prompt)
-        self.assertTrue(prompt.index("| Section | Time Range | Visual | Exclusion List About Physical Motions |") < prompt.index("# Requirements"))
+        self.assertTrue(prompt.index("| Section | Time Range | Visual |") < prompt.index("# Requirements"))
+
+    def test_uses_the_full_notion_video_condition_prompt(self):
+        prompt = build_video_prompt(SCRIPT)
+
+        self.assertIn("# Requirements", prompt)
+        self.assertIn("Actively apply the “Filming/Editing Techniques” specified in the table.", prompt)
+        self.assertIn("Follow realistic physical laws and temporal continuity.", prompt)
+        self.assertIn("Do not generate teleportation, floating, interpenetration, merging, duplication, disappearance, or unexplained transformations.", prompt)
+        self.assertIn("Objects held by a person must not suddenly change, disappear, duplicate, or be replaced.", prompt)
+
+    def test_custom_video_prompt_replaces_default_condition_prompt(self):
+        prompt = build_video_prompt(
+            SCRIPT,
+            custom_prompt="Show a side-angle product-use scene.",
+            use_default_prompt=False,
+        )
+
+        self.assertIn("Show a side-angle product-use scene.", prompt)
+        self.assertNotIn("# Requirements", prompt)
+
+    def test_custom_video_prompt_requires_nonempty_text(self):
+        with self.assertRaisesRegex(ValueError, "영상 프롬프트가 비어 있습니다"):
+            build_video_prompt(SCRIPT, custom_prompt="  ", use_default_prompt=False)
 
     def test_includes_full_script_context_in_video_prompt(self):
         prompt = build_video_prompt(CURRENT_SCRIPT)
@@ -313,6 +336,7 @@ class VideoGeneratorTests(unittest.TestCase):
 
         self.assertIn("Use the provided character image as the character reference", prompt)
         self.assertIn("A frontal view is not required", prompt)
+        self.assertIn("Fine clothing wrinkles", prompt)
         self.assertIn("Natural, subtle asymmetry", prompt)
         self.assertIn("Do not intentionally show product text in close-ups where it is clearly readable", prompt)
 

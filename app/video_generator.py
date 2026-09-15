@@ -32,7 +32,7 @@ DEFAULT_SUPPORTED_DURATIONS = tuple(range(4, 16))
 logger = logging.getLogger(__name__)
 
 
-# Keep this block identical to the latest Colab video-generation condition prompt.
+# Keep this block identical to the Notion 260914 video-generation condition prompt.
 VIDEO_CONDITION_PROMPT = """
 # Requirements
 
@@ -101,13 +101,13 @@ class VideoGenerationTimeoutError(VideoGenerationError):
 class VideoGenerationRequest:
     script: Mapping[str, Any]
     image_url: str
+    custom_prompt: str | None = None
+    use_default_prompt: bool = True
     resolution: str = "720p"
     aspect_ratio: str = "9:16"
     generate_audio: bool = False
     influencer_image_url: str | None = None
     detail_image_urls: tuple[str, ...] = ()
-    custom_prompt: str | None = None
-    use_default_prompt: bool = True
 
 
 @dataclass(frozen=True)

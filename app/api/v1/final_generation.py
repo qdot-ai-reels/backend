@@ -67,12 +67,16 @@ class FinalGenerationBody(BaseModel):
     image_url: str | None = Field(default=None, min_length=1)
     influencer_image_url: str = Field(min_length=1)
     reviews: list[Any] = Field(default_factory=list)
+    # `prompt` is the video prompt. Keep script prompt settings separate so a
+    # TTS-triggered script regeneration cannot accidentally use video guidance.
+    script_prompt: str | None = None
+    use_default_script_prompt: bool = True
     prompt: str | None = None
+    use_default_prompt: bool = True
     max_duration_seconds: int | None = Field(default=None, ge=1, le=30)
     channel: str = "Instagram Reels"
     target_audience: str = "육아에 관심 있는 보호자"
     allow_script_regeneration: bool = True
-    use_default_prompt: bool = True
 
 
 def validate_product_image_inputs(
@@ -276,7 +280,7 @@ def _generate_script(
         or (service.get_runtime_settings().video_max_duration_seconds if service else 15),
         service,
     )
-    custom_prompt = payload.get("prompt")
+    custom_prompt = payload.get("script_prompt")
     retry_instruction = None
     if retry_error is not None:
         retry_instruction = (
@@ -288,7 +292,7 @@ def _generate_script(
         image_url=payload.get("image_url") or _extract_image_url(raw),
         reviews=payload.get("reviews") or raw.get("reviews", []),
         custom_prompt=custom_prompt,
-        use_default_prompt=payload.get("use_default_prompt", True),
+        use_default_prompt=payload.get("use_default_script_prompt", True),
         max_duration_seconds=max_duration_seconds,
         channel=payload.get("channel", "Instagram Reels"),
         target_audience=payload.get("target_audience", "육아에 관심 있는 보호자"),
@@ -324,13 +328,13 @@ def _generate_video(
     request = VideoGenerationRequest(
         script=script,
         image_url=image_url,
+        custom_prompt=custom_prompt,
+        use_default_prompt=use_default_prompt,
         resolution=select_video_resolution(service, capabilities),
         aspect_ratio="9:16",
         generate_audio=False,
         influencer_image_url=influencer_image_url,
         detail_image_urls=detail_image_urls,
-        custom_prompt=custom_prompt,
-        use_default_prompt=use_default_prompt,
     )
     retries = service.get_runtime_settings().video_generation_retries if service else 2
     return VideoValidationPipeline(generate_video=lambda pipeline_request, _attempt: client.generate_video(pipeline_request), publish_video=publish_validated_video, max_retries=retries).run(request)

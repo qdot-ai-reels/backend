@@ -144,6 +144,37 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertEqual(opener.calls, 2)
         self.assertEqual(sleeps, [2.0])
 
+    def test_default_prompt_uses_the_notion_260914_ad_formats_and_fixed_requirements(self):
+        prompt = build_script_prompt(
+            ScriptGenerationRequest(
+                product=PRODUCT,
+                custom_prompt="CTA: 다른 문구",
+                max_duration_seconds=6,
+                channel="Other channel",
+            )
+        )
+
+        self.assertIn("### Contents", prompt)
+        self.assertIn("진짜 이게 된다고? -> 보여줌 -> 진짜 이게 가능하구나", prompt)
+        self.assertIn("- CTA Action: 페이지로 이동", prompt)
+        self.assertIn("- Video duration: 15", prompt)
+        self.assertIn("- Upload Channel: Instagram Reels", prompt)
+        self.assertNotIn("- CTA Action: 다른 문구", prompt)
+        self.assertNotIn("- Video duration: 6", prompt)
+
+    def test_custom_prompt_replaces_the_default_prompt(self):
+        prompt = build_script_prompt(
+            ScriptGenerationRequest(
+                product=PRODUCT,
+                custom_prompt="사용자 지정 광고 방향",
+                use_default_prompt=False,
+            )
+        )
+
+        self.assertIn("### 사용자 지정 프롬프트", prompt)
+        self.assertIn("사용자 지정 광고 방향", prompt)
+        self.assertNotIn("### Contents", prompt)
+
     def test_retries_when_no_image_endpoint_is_available(self):
         opener = ErrorThenSuccessOpener(
             404,
@@ -394,6 +425,7 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("Selling Point", body["messages"][0]["content"])
         self.assertIn("EWG 그린등급", body["messages"][0]["content"])
         self.assertIn("3.5음절", body["messages"][0]["content"])
+        self.assertIn("영상 스크립트 내의 음성 대사는 1초에 3.5음절이 넘지 않도록 한다.", body["messages"][0]["content"])
 
     def test_prompt_matches_colab_and_keeps_schema_out_of_prompt(self):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
@@ -524,7 +556,7 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("- Description Text: 상품 설명", prompt)
         self.assertIn("- Detail Info: 상세 정보", prompt)
         self.assertIn("- Reviews: ['리뷰 내용']", prompt)
-        self.assertIn("- CTA Action: 링크 확인", prompt)
+        self.assertIn("- CTA Action: 페이지로 이동", prompt)
 
     def test_includes_prompt_filling_rule_and_ad_methodologies(self):
         prompt = build_script_prompt(
@@ -534,6 +566,7 @@ class ScriptGeneratorTests(unittest.TestCase):
         self.assertIn("유저가 프롬프트를 통해 해당 상품정보를 입력해주었다면", prompt)
         self.assertIn("Hook-Body-CTA", prompt)
         self.assertIn("PAS", prompt)
+        self.assertIn("Physical-Safe Motion & Continuity", prompt)
         self.assertIn("Physical-Safe Scene Selection", prompt)
 
     def test_includes_all_script_prompt_260830_1_video_direction_rules(self):
@@ -541,15 +574,20 @@ class ScriptGeneratorTests(unittest.TestCase):
 
         self.assertIn("dolly", prompt)
         self.assertIn("Reduce fill", prompt)
-        self.assertIn("Visual Realism", prompt)
+        self.assertIn("Physical-Safe Motion & Continuity", prompt)
         self.assertIn("카메라를 주시하며 말하지 않는다", prompt)
         self.assertIn("동일 인물의 얼굴, 헤어스타일, 의상을 장면마다 유지", prompt)
+        self.assertIn("상품 라벨의 글자와 로고는 식별 가능한 정면 클로즈업으로 보여주지 않는다", prompt)
+        self.assertIn("CTA의 문구 자체는 Visual에 작성하지 않는다", prompt)
+        self.assertIn("Visual Realism", prompt)
         self.assertIn("상품 라벨은 식별 가능한 정면 클로즈업을 피한다", prompt)
         self.assertIn("상품에 실제 표기된 텍스트 외의 텍스트를 추가하지 않는다", prompt)
 
-    def test_separates_model_baked_text_from_hyperframes_captions(self):
+    def test_uses_notion_cta_rules_for_auditory_fields(self):
         prompt = build_script_prompt(ScriptGenerationRequest(product=PRODUCT))
 
+        self.assertIn("CTA 문구는 voiceover 또는 subtitle", prompt)
+        self.assertIn("마지막 Section의 auditory", prompt)
         self.assertNotIn("HyperFrames가 별도로 추가하는 텍스트 애니메이션용 캡션", prompt)
         self.assertNotIn("subtitle`을 `null`이나 빈 문자열로 반환하지 않는다", prompt)
 
@@ -562,6 +600,8 @@ class ScriptGeneratorTests(unittest.TestCase):
             "소비자가 판단할 수 있는 시각적으로 정보",
             "지나치게 과장하지 말아야",
             "허위 경험",
+            "물리적 움직임을 생성하지 않아도 광고 메시지를 전달",
+            "Physical-Safe Scene Selection",
             "자연스러운 피부결",
             "미세한 잡티",
             "옷 주름",
@@ -570,12 +610,15 @@ class ScriptGeneratorTests(unittest.TestCase):
         for rule in expected_rules:
             self.assertIn(rule, prompt)
 
-    def test_enforces_documented_visual_length_in_response_schema(self):
+    def test_uses_the_notion_scene_schema(self):
         visual_schema = SCRIPT_RESPONSE_SCHEMA["properties"]["scenes"]["items"]["properties"]["visual"]
 
         self.assertNotIn("maxLength", visual_schema)
+        scene_schema = SCRIPT_RESPONSE_SCHEMA["properties"]["scenes"]["items"]
+        self.assertEqual(SCRIPT_RESPONSE_SCHEMA["properties"]["scenes"]["maxItems"], 3)
+        self.assertIn("exclusion_list_about_physical_motions", scene_schema["required"])
 
-    def test_rejects_visual_that_reaches_100_characters(self):
+    def test_rejects_visual_that_exceeds_300_characters(self):
         document = json.loads(json.dumps(VALID_DOCUMENT))
         document["scenes"][0]["visual"] = "가" * 301
 

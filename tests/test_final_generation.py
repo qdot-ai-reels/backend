@@ -9,6 +9,7 @@ from app.api.v1.final_generation import (
     BACKGROUND_VIDEO_MAX_POLL_ATTEMPTS,
     BACKGROUND_VIDEO_MAX_WAIT_SECONDS,
     FinalGenerationBody,
+    _generate_script,
     _generate_narration_with_script_regeneration,
     _generate_video,
     _script_duration_seconds,
@@ -101,6 +102,41 @@ class FinalGenerationApiTests(unittest.TestCase):
             on_submitted=None,
         )
 
+    @patch("app.api.v1.final_generation.VideoValidationPipeline")
+    @patch("app.api.v1.final_generation.select_video_resolution", return_value="720p")
+    @patch("app.api.v1.final_generation.build_video_client")
+    @patch("app.api.v1.final_generation.get_video_model_capabilities")
+    def test_background_generation_passes_custom_video_prompt_mode(
+        self,
+        get_capabilities,
+        _build_client,
+        _select_resolution,
+        pipeline_class,
+    ):
+        get_capabilities.return_value = VideoModelCapabilities(
+            model_id="video-model",
+            name="Video",
+            supported_durations=(15,),
+            supported_aspect_ratios=("9:16",),
+            supported_resolutions=("720p",),
+            generate_audio=False,
+        )
+        pipeline_class.return_value.run.return_value = Mock()
+
+        _generate_video(
+            script={"scenes": [{"time_range_sec": {"start": 0, "end": 15}}]},
+            image_url="https://example.com/product.jpg",
+            influencer_image_url="https://example.com/influencer.jpg",
+            detail_image_urls=(),
+            service=None,
+            custom_prompt="Custom video prompt",
+            use_default_prompt=False,
+        )
+
+        request = pipeline_class.return_value.run.call_args.args[0]
+        self.assertFalse(request.use_default_prompt)
+        self.assertEqual(request.custom_prompt, "Custom video prompt")
+
     def test_accepts_product_and_existing_script(self):
         body = FinalGenerationBody(
             product={
@@ -130,6 +166,41 @@ class FinalGenerationApiTests(unittest.TestCase):
         )
 
         self.assertEqual(body.influencer_image_url, "https://example.com/influencer.jpg")
+
+    def test_accepts_custom_video_prompt_mode(self):
+        body = FinalGenerationBody(
+            product={"name": "상품"},
+            script={"meta": {}, "summary": {}, "scenes": []},
+            image_url="https://example.com/product.jpg",
+            influencer_image_url="https://example.com/influencer.jpg",
+            prompt="Custom video prompt",
+            use_default_prompt=False,
+            script_prompt="Custom script prompt",
+            use_default_script_prompt=False,
+        )
+
+        self.assertFalse(body.use_default_prompt)
+        self.assertFalse(body.use_default_script_prompt)
+
+    @patch("app.api.v1.final_generation.build_script_client")
+    def test_script_regeneration_preserves_custom_prompt_mode(self, build_script_client):
+        client = build_script_client.return_value
+        client.generate_script.return_value = {"scenes": [{"section": "Hook"}]}
+
+        _generate_script(
+            {
+                "product": {"name": "상품", "image_url": "https://example.com/product.jpg"},
+                "prompt": "Custom video prompt",
+                "use_default_prompt": False,
+                "script_prompt": "Custom script prompt",
+                "use_default_script_prompt": False,
+            },
+            service=None,
+        )
+
+        request = client.generate_script.call_args.args[0]
+        self.assertFalse(request.use_default_prompt)
+        self.assertEqual(request.custom_prompt, "Custom script prompt")
 
     def test_rejects_missing_input(self):
         with self.assertRaises(ValidationError):

@@ -378,12 +378,33 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 {product_prompt_fields}
 {f"\n\n{request.retry_instruction.strip()}" if request.retry_instruction and request.retry_instruction.strip() else ""}
 """
-
-
     return f"""
 당신은 공동구매 광고 숏폼 스크립트 작성자입니다.
 
 아래 상품 데이터에 실제로 포함된 정보만 사용해 스크립트를 작성하세요.
+
+### Contents
+- [필수] '상품 정보를 기반으로' 아래의 형태로 내용을 담아야 한다.
+  - '진짜 이게 된다고? -> 보여줌 -> 진짜 이게 가능하구나'
+    - ex. 사용 전후 OOO 직접 측정해 봤습니다
+    - ex. N초만에 만들 수 있는 OOO
+    - ex. 어디까지 가능할까? OOO 테스트
+  - '나 이런 상품을 발견했어요'
+    - ex. 특정 시즌, 상황별 추천
+    - ex. 최근에 잘산 아이템, 나만 알고 있는 꿀조합 추천
+    - ex. OO에만 N만원 쓴 사람이 추천하는 아이템
+  - '일상 속 문제가 이 상품으로 이렇게 해결되었어요'
+    - ex, N일만에 OOO 성공했어요
+  - 활용법 제안형
+    - ex. 매일 아침 3분 루틴에 이거 하나만 추가하세요,
+    - ex. 퇴근 후 10분만 투자하면 달라집니다
+    - ex. 요즘 매일 사용하는/자주 하고 있는 루틴 보여 주기
+  - 가격 강조형
+    - ex. OO템이 N만원대?! 역대급 할인
+    - ex. N만원으로 OOOO 가능할까?
+  - 생활 속 꿀팁 속에 자연스럽게 보여주기
+  - '이 상품을 사용하는 사람의 하루'
+  - '솔직히 처음에는 별로라고 생각했습니다. 그런데 써보니 달라
 
 ### Condition
 #### 1. 광고 진실성
@@ -410,7 +431,6 @@ def build_script_prompt(request: ScriptGenerationRequest) -> str:
 - 'Masterpiece', 'Hyper-realistic', 'Stunning', 'Cinematic'과 같은 추상적 표현 대신 구체적인 카메라/조명 용어를 사용한다.
 - 카메라 예시: locked-off, push-in, dolly, pan, tilt, rack focus
 - 조명 예시: Reduce fill, Cool down, Desaturate, Diffuse, Dim down, Reposition
-
 (2) 세부 규칙
 - 등장인물이 카메라를 주시하며 말하지 않는다.
 - 동일 인물의 얼굴, 헤어스타일, 의상을 장면마다 유지한다.
@@ -477,7 +497,6 @@ b. Physical Risk Priority: 다음 위험은 장면 선택 단계에서 우선적
   - 접촉 없는 물체 이동
   - 원인 없는 위치/방향 변화
   - Section 간 상태 불일치
-
 - P1: 가능한 한 피한다.
   - 갑작스러운 속도/방향 변화
   - 중력에 반하는 움직임
@@ -486,7 +505,6 @@ b. Physical Risk Priority: 다음 위험은 장면 선택 단계에서 우선적
   - 발 미끄러짐
   - 옷/머리카락 관통
   - 급격한 변형
-
 - P2: 필요하지 않으면 피한다.
   - 여러 물체의 동시 이동
   - 복잡한 액체/거품/연기/불
@@ -553,10 +571,11 @@ b. Physical Risk Priority: 다음 위험은 장면 선택 단계에서 우선적
 - BAB(Before-After-Bridge)
 - 4Ps(Promise-Picture-Proof-Push)
 
+
 ### 요구사항
-- CTA Action: {cta_action}
-- Video duration: {request.max_duration_seconds}
-- Upload Channel: {request.channel}
+- CTA Action: 페이지로 이동
+- Video duration: 15
+- Upload Channel: Instagram Reels
 = Ads Video Style: 상품의 우수성을 시각적으로 보여주고 싶어서 안달이 난, 인스타그램 인플루언서 내돈내산 릴스 영상 스타일
 
 ### 인물 정보
@@ -569,7 +588,7 @@ b. Physical Risk Priority: 다음 위험은 장면 선택 단계에서 우선적
 
 
 def get_default_script_prompt_preview() -> str:
-    """Return the canonical default prompt with runtime values represented as placeholders."""
+    """Return the exact default prompt with product values represented as placeholders."""
     return build_script_prompt(
         ScriptGenerationRequest(
             product={
@@ -583,11 +602,9 @@ def get_default_script_prompt_preview() -> str:
             reviews=["{{reviews}}"],
             custom_prompt="CTA: {{cta_action}}",
             max_duration_seconds=15,
-            channel="{{channel}}",
-            target_audience="{{target_audience}}",
+            channel="Instagram Reels",
         )
     ).strip()
-
 def build_script_message_content(
     request: ScriptGenerationRequest,
     prompt: str,
@@ -668,9 +685,7 @@ def validate_script_document(
             "speaker",
             "main_target",
         ),
-        "video": (
-            "video_duration",
-        ),
+        "video": ("video_duration",),
         "etc": ("additional_information", "video_ads_methodology"),
     }.items():
         value = document.get(parent)
@@ -733,6 +748,11 @@ def validate_script_document(
             raise ScriptValidationError(f"{index}번째 scene의 visual은 300자 이내여야 합니다.")
         if not isinstance(scene.get("intent"), str) or not scene["intent"].strip():
             raise ScriptValidationError(f"{index}번째 scene의 intent가 필요합니다.")
+        exclusion_list = scene.get("exclusion_list_about_physical_motions")
+        if not isinstance(exclusion_list, str):
+            raise ScriptValidationError(
+                f"{index}번째 scene의 exclusion_list_about_physical_motions가 필요합니다."
+            )
         auditory = scene.get("auditory")
         if not isinstance(auditory, Mapping):
             raise ScriptValidationError(f"{index}번째 scene의 auditory가 필요합니다.")
